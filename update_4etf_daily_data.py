@@ -70,10 +70,10 @@ def fetch_last_daily_bar(symbol: str) -> dict:
     idx = last.index[0].to_pydatetime()
     row = {
         "date": idx.date(),
-        "open": float(last["Open"].iloc[0]),
-        "high": float(last["High"].iloc[0]),
-        "low": float(last["Low"].iloc[0]),
-        "close": float(last["Close"].iloc[0]),
+        "open": float(last["Open"].values[0]),
+"high": float(last["High"].values[0]),
+"low": float(last["Low"].values[0]),
+"close": float(last["Close"].values[0]),
     }
     return row
 
