@@ -54,26 +54,21 @@ def fetch_last_daily_bar(symbol: str) -> dict:
     """
     Fetch the most recent daily bar for a symbol.
     """
-    data = yf.download(
-        tickers=symbol,
-        period="7d",
-        interval="1d",
-        auto_adjust=False,
-        progress=False,
-        threads=False,
-    )
+    ticker = yf.Ticker(symbol)
+    data = ticker.history(period="7d", interval="1d", auto_adjust=False)
 
     if data.empty:
         raise ValueError(f"No data returned for {symbol}")
 
-    last = data.tail(1)
-    idx = last.index[0].to_pydatetime()
+    last = data.iloc[-1]
+    idx = data.index[-1].to_pydatetime()
+
     row = {
         "date": idx.date(),
-        "open": float(last["Open"].values[0]),
-"high": float(last["High"].values[0]),
-"low": float(last["Low"].values[0]),
-"close": float(last["Close"].values[0]),
+        "open": float(last["Open"]),
+        "high": float(last["High"]),
+        "low": float(last["Low"]),
+        "close": float(last["Close"]),
     }
     return row
 
