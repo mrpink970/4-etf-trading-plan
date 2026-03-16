@@ -2,7 +2,8 @@ name: Update ETF Data
 
 on:
   schedule:
-    - cron: '30 22 * * 1-5'
+    - cron: '45 21 * * 1-5'
+    - cron: '00 22 * * 1-5'
   workflow_dispatch:
 permissions:
   contents: write
