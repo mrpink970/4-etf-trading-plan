@@ -21,19 +21,30 @@ CLOSE_ONLY_MAP = {
 
 
 def get_data(ticker):
-    data = yf.download(ticker, period="5d", interval="1d", progress=False, auto_adjust=False)
+    data = yf.download(
+        ticker,
+        period="5d",
+        interval="1d",
+        progress=False,
+        auto_adjust=False,
+        group_by="column",
+        threads=False,
+    )
 
     if data.empty:
         return None
 
-    # Always force last row safely
-    last = data.tail(1)
+    # Flatten MultiIndex columns if yfinance returns them
+    if hasattr(data.columns, "nlevels") and data.columns.nlevels > 1:
+        data.columns = data.columns.get_level_values(0)
+
+    last = data.tail(1).iloc[0]
 
     return {
-        "open": float(last["Open"].values[0]),
-        "high": float(last["High"].values[0]),
-        "low": float(last["Low"].values[0]),
-        "close": float(last["Close"].values[0]),
+        "open": float(last["Open"]),
+        "high": float(last["High"]),
+        "low": float(last["Low"]),
+        "close": float(last["Close"]),
     }
 
 
