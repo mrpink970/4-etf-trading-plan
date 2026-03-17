@@ -2,11 +2,13 @@ name: Update ETF Data
 
 on:
   schedule:
-    - cron: '45 21 * * 1-5'
-    - cron: '00 22 * * 1-5'
+    - cron: '15 23 * * 1-5'
+    - cron: '30 23 * * 1-5'
   workflow_dispatch:
+
 permissions:
   contents: write
+
 jobs:
   update-data:
     runs-on: ubuntu-latest
@@ -22,7 +24,7 @@ jobs:
 
       - name: Install packages
         run: |
-          pip install yfinance openpyxl
+          pip install yfinance pandas numpy openpyxl
 
       - name: Run update script
         run: |
@@ -32,6 +34,7 @@ jobs:
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "actions@github.com"
+          rm -f 4_ETF_Trading_Workbook_Template.bak.xlsx
           git add 4_ETF_Trading_Workbook_Template.xlsx
-          git commit -m "Daily ETF update" || echo "No changes"
-          git push
+          git diff --cached --quiet && echo "No changes" || git commit -m "Daily ETF update"
+          git push || echo "Nothing to push"
