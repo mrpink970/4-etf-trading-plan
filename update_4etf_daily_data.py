@@ -20,24 +20,20 @@ CLOSE_ONLY_MAP = {
 }
 
 
-def get_data(ticker: str):
-    data = yf.download(
-        ticker,
-        period="5d",
-        interval="1d",
-        progress=False,
-        auto_adjust=False,
-        threads=False,
-    )
+def get_data(ticker):
+    data = yf.download(ticker, period="5d", interval="1d", progress=False, auto_adjust=False)
+
     if data.empty:
         return None
 
-    last = data.iloc[-1]
+    # Always force last row safely
+    last = data.tail(1)
+
     return {
-        "open": float(last["Open"]),
-        "high": float(last["High"]),
-        "low": float(last["Low"]),
-        "close": float(last["Close"]),
+        "open": float(last["Open"].values[0]),
+        "high": float(last["High"].values[0]),
+        "low": float(last["Low"].values[0]),
+        "close": float(last["Close"].values[0]),
     }
 
 
