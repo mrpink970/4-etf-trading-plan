@@ -34,17 +34,24 @@ def get_data(ticker):
     if data.empty:
         return None
 
-    # Flatten MultiIndex columns if yfinance returns them
     if hasattr(data.columns, "nlevels") and data.columns.nlevels > 1:
         data.columns = data.columns.get_level_values(0)
 
-    last = data.tail(1).iloc[0]
+    def scalar(value):
+        import numpy as np
+        if hasattr(value, "iloc"):
+            value = value.iloc[0]
+        if isinstance(value, np.ndarray):
+            value = value.flatten()[0]
+        return float(value)
+
+    last = data.tail(1)
 
     return {
-        "open": float(last["Open"]),
-        "high": float(last["High"]),
-        "low": float(last["Low"]),
-        "close": float(last["Close"]),
+        "open": scalar(last["Open"]),
+        "high": scalar(last["High"]),
+        "low": scalar(last["Low"]),
+        "close": scalar(last["Close"]),
     }
 
 
