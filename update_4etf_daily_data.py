@@ -1,19 +1,10 @@
-
 import yfinance as yf
-import openpyxl
-from datetime import datetime
+import pandas as pd
+from openpyxl import load_workbook
 
-# Update this path if your workbook lives in a subfolder in GitHub
 FILE = "4_ETF_Trading_Workbook_Template.xlsx"
 
-TICKERS = {
-    "SOXL": "SOXL",
-    "SOXS": "SOXS",
-    "TQQQ": "TQQQ",
-    "SQQQ": "SQQQ",
-    "QQQ": "QQQ",
-    "SMH": "SMH",
-}
+TICKERS = ["SOXL", "SOXS", "TQQQ", "SQQQ", "QQQ", "SMH"]
 
 def get_data(ticker):
     data = yf.download(ticker, period="5d", interval="1d", progress=False)
@@ -21,8 +12,8 @@ def get_data(ticker):
     if data.empty:
         return None
 
-    # Handle multi-index (this is the fix)
-    if isinstance(data.columns, tuple) or hasattr(data.columns, "levels"):
+    # Fix multi-index issue
+    if hasattr(data.columns, "levels"):
         data.columns = data.columns.get_level_values(0)
 
     last = data.iloc[-1]
@@ -34,36 +25,41 @@ def get_data(ticker):
         "close": float(last["Close"]),
     }
 
-wb = openpyxl.load_workbook(FILE)
-ws = wb["Daily_Data"]
+def main():
+    wb = load_workbook(FILE)
+    ws = wb["Daily_Data"]
 
-row = ws.max_row + 1
-today = datetime.now().strftime("%m/%d/%y")
-ws[f"A{row}"] = today
+    # Find next empty row
+    row = ws.max_row + 1
 
-# Column starts in v7/vTemplate rebuild structure
-col_map = {
-    "SOXL": 2,   # B:E
-    "SOXS": 9,   # I:L
-    "TQQQ": 16,  # P:S
-    "SQQQ": 23,  # W:Z
-}
+    # Date
+    ws[f"A{row}"] = pd.Timestamp.today().date()
 
-for ticker, col in col_map.items():
-    d = get_data(ticker)
-    if d:
-        ws.cell(row=row, column=col).value = d["open"]
-        ws.cell(row=row, column=col + 1).value = d["high"]
-        ws.cell(row=row, column=col + 2).value = d["low"]
-        ws.cell(row=row, column=col + 3).value = d["close"]
+    col_map = {
+        "SOXL": ("B", "C", "D", "E"),
+        "SOXS": ("I", "J", "K", "L"),
+        "TQQQ": ("P", "Q", "R", "S"),
+        "SQQQ": ("W", "X", "Y", "Z"),
+        "QQQ":  ("AD", None, None, None),
+        "SMH":  ("AH", None, None, None),
+    }
 
-qqq = get_data("QQQ")
-smh = get_data("SMH")
+    for ticker in TICKERS:
+        d = get_data(ticker)
+        if d is None:
+            continue
 
-if qqq:
-    ws.cell(row=row, column=30).value = qqq["close"]  # AD
-if smh:
-    ws.cell(row=row, column=34).value = smh["close"]  # AH
+        cols = col_map[ticker]
 
-wb.save(FILE)
-print("Updated successfully")
+        ws[f"{cols[0]}{row}"] = d["open"]
+        if cols[1]:
+            ws[f"{cols[1]}{row}"] = d["high"]
+        if cols[2]:
+            ws[f"{cols[2]}{row}"] = d["low"]
+        if cols[3]:
+            ws[f"{cols[3]}{row}"] = d["close"]
+
+    wb.save(FILE)
+
+if __name__ == "__main__":
+    main()
