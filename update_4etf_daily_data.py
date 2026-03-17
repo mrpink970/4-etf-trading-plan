@@ -17,9 +17,16 @@ TICKERS = {
 
 def get_data(ticker):
     data = yf.download(ticker, period="5d", interval="1d", progress=False)
+
     if data.empty:
         return None
+
+    # Handle multi-index (this is the fix)
+    if isinstance(data.columns, tuple) or hasattr(data.columns, "levels"):
+        data.columns = data.columns.get_level_values(0)
+
     last = data.iloc[-1]
+
     return {
         "open": float(last["Open"]),
         "high": float(last["High"]),
