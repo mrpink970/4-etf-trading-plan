@@ -45,31 +45,70 @@ def safe_float(value) -> Optional[float]:
         return None
 
 
-def read_daily_data_table(daily_ws) -> pd.DataFrame:
-    daily_rows = list(daily_ws.iter_rows(values_only=True))
-    if not daily_rows:
+def find_header_row(rows: List[tuple]) -> int:
+    """
+    Find the row index containing the Daily_Data headers.
+    We identify it by the presence of 'Date' and at least one ETF Open column.
+    """
+    for idx, row in enumerate(rows):
+        values = [str(v).strip() if v is not None else "" for v in row]
+        if "Date" in values and any(v.endswith(" Open") for v in values):
+            return idx
+    raise ValueError("Could not find Daily_Data header row.")
+
+
+def read_daily_data_wide(daily_ws) -> pd.DataFrame:
+    rows = list(daily_ws.iter_rows(values_only=True))
+    if not rows:
         raise ValueError("Daily_Data sheet is empty.")
 
-    headers = [str(h).strip() if h is not None else "" for h in daily_rows[0]]
+    header_idx = find_header_row(rows)
+    headers = [str(h).strip() if h is not None else "" for h in rows[header_idx]]
+
     records = []
-    for row in daily_rows[1:]:
-        rec = {headers[i]: row[i] if i < len(row) else None for i in range(len(headers))}
+    for row in rows[header_idx + 1:]:
+        if all(v is None or str(v).strip() == "" for v in row):
+            continue
+        rec = {}
+        for i, h in enumerate(headers):
+            if h == "":
+                continue
+            rec[h] = row[i] if i < len(row) else None
         records.append(rec)
 
-    daily_df = pd.DataFrame(records)
-    if daily_df.empty:
-        raise ValueError("Daily_Data sheet has no rows.")
+    df = pd.DataFrame(records)
+    if df.empty:
+        raise ValueError("Daily_Data has no data rows under the header row.")
 
-    required_cols = {"Date", "Ticker", "Open", "High", "Low", "Close"}
-    missing = required_cols - set(daily_df.columns)
-    if missing:
-        raise ValueError(f"Daily_Data missing required columns: {sorted(missing)}")
+    if "Date" not in df.columns:
+        raise ValueError("Daily_Data missing Date column after parsing.")
 
-    daily_df = daily_df[daily_df["Date"].notna()].copy()
-    daily_df["Date"] = pd.to_datetime(daily_df["Date"]).dt.date
-    daily_df["Ticker"] = daily_df["Ticker"].astype(str).str.upper().str.strip()
+    df = df[df["Date"].notna()].copy()
+    df["Date"] = pd.to_datetime(df["Date"]).dt.date
 
-    return daily_df
+    return df
+
+
+def extract_latest_prices_from_wide(df: pd.DataFrame) -> tuple[str, Dict[str, Dict[str, float]]]:
+    latest_date = df["Date"].max()
+    latest_row = df[df["Date"] == latest_date].iloc[-1]
+
+    price_map: Dict[str, Dict[str, float]] = {}
+
+    for etf in sorted(ALL_ETFS):
+        open_col = f"{etf} Open"
+        high_col = f"{etf} High"
+        low_col = f"{etf} Low"
+        close_col = f"{etf} Close"
+
+        price_map[etf] = {
+            "open": safe_float(latest_row.get(open_col)),
+            "high": safe_float(latest_row.get(high_col)),
+            "low": safe_float(latest_row.get(low_col)),
+            "close": safe_float(latest_row.get(close_col)),
+        }
+
+    return str(latest_date), price_map
 
 
 def load_workbook_data(path: Path) -> Dict[str, object]:
@@ -84,31 +123,17 @@ def load_workbook_data(path: Path) -> Dict[str, object]:
     signal_ws = wb["Signal"]
     daily_ws = wb["Daily_Data"]
 
-    # Dashboard cells from your workbook
     primary_etf = normalize_etf(signal_ws["D23"].value)
     secondary_etf = normalize_etf(signal_ws["D24"].value)
     signal_date_raw = signal_ws["D27"].value
 
-    daily_df = read_daily_data_table(daily_ws)
+    daily_df = read_daily_data_wide(daily_ws)
+    daily_date, price_map = extract_latest_prices_from_wide(daily_df)
 
     if signal_date_raw is not None:
         signal_date = str(pd.to_datetime(signal_date_raw).date())
     else:
-        signal_date = str(daily_df["Date"].max())
-
-    latest_daily_date = daily_df["Date"].max()
-    latest_daily = daily_df[daily_df["Date"] == latest_daily_date].copy()
-
-    price_map = {}
-    for _, row in latest_daily.iterrows():
-        ticker = normalize_etf(row["Ticker"])
-        if ticker in ALL_ETFS:
-            price_map[ticker] = {
-                "open": safe_float(row["Open"]),
-                "high": safe_float(row["High"]),
-                "low": safe_float(row["Low"]),
-                "close": safe_float(row["Close"]),
-            }
+        signal_date = daily_date
 
     return {
         "date": signal_date,
