@@ -36,6 +36,15 @@ def infer_regime(primary_etf: str) -> str:
     return "neutral"
 
 
+def safe_float(value) -> Optional[float]:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
 def load_workbook_data(path: Path) -> Dict[str, object]:
     if not path.exists():
         raise FileNotFoundError(f"Workbook not found: {path}")
@@ -48,41 +57,25 @@ def load_workbook_data(path: Path) -> Dict[str, object]:
     signal_ws = wb["Signal"]
     daily_ws = wb["Daily_Data"]
 
-    # Read signal sheet into row dicts
-    signal_rows = list(signal_ws.iter_rows(values_only=True))
-    if not signal_rows:
-        raise ValueError("Signal sheet is empty.")
+    # Dashboard cell mapping from your workbook
+    primary_etf = normalize_etf(signal_ws["D23"].value)
+    secondary_etf = normalize_etf(signal_ws["D24"].value)
+    signal_date_raw = signal_ws["D27"].value
 
-    headers = [str(h).strip() if h is not None else "" for h in signal_rows[0]]
-    records = []
-    for row in signal_rows[1:]:
-        rec = {headers[i]: row[i] if i < len(row) else None for i in range(len(headers))}
-        records.append(rec)
+    if signal_date_raw is None:
+        raise ValueError("Signal sheet missing Signal Date in cell D27.")
 
-    # Latest non-empty record by Date
-    signal_df = pd.DataFrame(records)
-    if signal_df.empty or "Date" not in signal_df.columns:
-        raise ValueError("Signal sheet must include a Date column.")
+    signal_date = str(pd.to_datetime(signal_date_raw).date())
 
-    signal_df = signal_df[signal_df["Date"].notna()].copy()
-    if signal_df.empty:
-        raise ValueError("Signal sheet has no dated rows.")
-
-    latest = signal_df.iloc[-1].to_dict()
-    signal_date = str(pd.to_datetime(latest["Date"]).date())
-
-    primary_etf = normalize_etf(latest.get("Primary ETF", ""))
-    secondary_etf = normalize_etf(latest.get("Secondary ETF", ""))
-
-    # Collect latest OHLC row for each ETF from Daily_Data
+    # Read Daily_Data as table
     daily_rows = list(daily_ws.iter_rows(values_only=True))
     if not daily_rows:
         raise ValueError("Daily_Data sheet is empty.")
 
-    dheaders = [str(h).strip() if h is not None else "" for h in daily_rows[0]]
+    headers = [str(h).strip() if h is not None else "" for h in daily_rows[0]]
     daily_records = []
     for row in daily_rows[1:]:
-        rec = {dheaders[i]: row[i] if i < len(row) else None for i in range(len(dheaders))}
+        rec = {headers[i]: row[i] if i < len(row) else None for i in range(len(headers))}
         daily_records.append(rec)
 
     daily_df = pd.DataFrame(daily_records)
@@ -119,15 +112,6 @@ def load_workbook_data(path: Path) -> Dict[str, object]:
         "regime": infer_regime(primary_etf),
         "prices": price_map,
     }
-
-
-def safe_float(value) -> Optional[float]:
-    if value is None or value == "":
-        return None
-    try:
-        return float(value)
-    except Exception:
-        return None
 
 
 def load_positions() -> pd.DataFrame:
@@ -252,65 +236,6 @@ def update_trailing_stops(positions: pd.DataFrame, prices: Dict[str, Dict[str, f
     return updated
 
 
-def exit_positions(
-    positions: pd.DataFrame,
-    exits: List[Dict[str, str]],
-    asof_date: str,
-    prices: Dict[str, Dict[str, float]],
-    trade_log: pd.DataFrame,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    if positions.empty or not exits:
-        return positions, trade_log
-
-    remaining_rows = []
-    trade_log_out = trade_log.copy()
-
-    exit_map = {e["ticker"]: e["reason"] for e in exits}
-
-    for _, row in positions.iterrows():
-        ticker = normalize_etf(row["ticker"])
-        if ticker not in exit_map:
-            remaining_rows.append(row.to_dict())
-            continue
-
-        px = prices.get(ticker, {})
-        exit_price = px.get("open")
-        if exit_price is None:
-            # If no open price, keep the position rather than fabricate an exit
-            remaining_rows.append(row.to_dict())
-            continue
-
-        entry_price = safe_float(row["entry_price"])
-        shares = int(row["shares"])
-        gross_pl = (exit_price - entry_price) * shares
-        return_pct = ((exit_price / entry_price) - 1) * 100 if entry_price else 0.0
-
-        trade_log_out = pd.concat(
-            [
-                trade_log_out,
-                pd.DataFrame(
-                    [
-                        {
-                            "ticker": ticker,
-                            "regime": row["regime"],
-                            "entry_date": row["entry_date"],
-                            "entry_price": round(entry_price, 6),
-                            "exit_date": asof_date,
-                            "exit_price": round(exit_price, 6),
-                            "shares": shares,
-                            "gross_pl": round(gross_pl, 6),
-                            "return_pct": round(return_pct, 6),
-                            "exit_reason": exit_map[ticker],
-                        }
-                    ]
-                ),
-            ],
-            ignore_index=True,
-        )
-
-    return pd.DataFrame(remaining_rows), trade_log_out
-
-
 def build_exit_list(
     positions: pd.DataFrame,
     current_regime: str,
@@ -344,11 +269,68 @@ def build_exit_list(
             exits.append({"ticker": ticker, "reason": "trailing_stop"})
             continue
 
-    # remove duplicates by ticker, preserving first reason
     dedup = {}
     for e in exits:
         dedup.setdefault(e["ticker"], e["reason"])
     return [{"ticker": k, "reason": v} for k, v in dedup.items()]
+
+
+def exit_positions(
+    positions: pd.DataFrame,
+    exits: List[Dict[str, str]],
+    asof_date: str,
+    prices: Dict[str, Dict[str, float]],
+    trade_log: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if positions.empty or not exits:
+        return positions, trade_log
+
+    remaining_rows = []
+    trade_log_out = trade_log.copy()
+
+    exit_map = {e["ticker"]: e["reason"] for e in exits}
+
+    for _, row in positions.iterrows():
+        ticker = normalize_etf(row["ticker"])
+        if ticker not in exit_map:
+            remaining_rows.append(row.to_dict())
+            continue
+
+        px = prices.get(ticker, {})
+        exit_price = px.get("open")
+        if exit_price is None:
+            remaining_rows.append(row.to_dict())
+            continue
+
+        entry_price = safe_float(row["entry_price"])
+        shares = int(row["shares"])
+        gross_pl = (exit_price - entry_price) * shares
+        return_pct = ((exit_price / entry_price) - 1) * 100 if entry_price else 0.0
+
+        trade_log_out = pd.concat(
+            [
+                trade_log_out,
+                pd.DataFrame(
+                    [
+                        {
+                            "ticker": ticker,
+                            "regime": row["regime"],
+                            "entry_date": row["entry_date"],
+                            "entry_price": round(entry_price, 6),
+                            "exit_date": asof_date,
+                            "exit_price": round(exit_price, 6),
+                            "shares": shares,
+                            "gross_pl": round(gross_pl, 6),
+                            "return_pct": round(return_pct, 6),
+                            "exit_reason": exit_map[ticker],
+                        }
+                    ]
+                ),
+            ],
+            ignore_index=True,
+        )
+
+    return pd.DataFrame(remaining_rows), trade_log_out
 
 
 def build_entries(
@@ -414,10 +396,8 @@ def main() -> None:
     positions = load_positions()
     trade_log = load_trade_log()
 
-    # 1. Update trailing stops with current highs
     positions = update_trailing_stops(positions, prices)
 
-    # 2. Determine exits
     exits = build_exit_list(
         positions=positions,
         current_regime=current_regime,
@@ -426,7 +406,6 @@ def main() -> None:
         prices=prices,
     )
 
-    # 3. Execute exits at next open assumption using current open in latest row
     positions, trade_log = exit_positions(
         positions=positions,
         exits=exits,
@@ -435,7 +414,6 @@ def main() -> None:
         trade_log=trade_log,
     )
 
-    # 4. Build entries
     positions = build_entries(
         positions=positions,
         current_regime=current_regime,
@@ -445,7 +423,6 @@ def main() -> None:
         prices=prices,
     )
 
-    # 5. Save outputs
     if positions.empty:
         positions = pd.DataFrame(
             columns=[
