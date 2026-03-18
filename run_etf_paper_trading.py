@@ -62,26 +62,29 @@ def read_daily_data_wide(daily_ws) -> pd.DataFrame:
     if not rows:
         raise ValueError("Daily_Data sheet is empty.")
 
-    header_idx = find_header_row(rows)
-    headers = [str(h).strip() if h is not None else "" for h in rows[header_idx]]
+    # Force row 0 as header
+    headers = [str(h).strip() if h is not None else "" for h in rows[0]]
 
     records = []
-    for row in rows[header_idx + 1:]:
+    for row in rows[1:]:
         if all(v is None or str(v).strip() == "" for v in row):
             continue
+
         rec = {}
         for i, h in enumerate(headers):
             if h == "":
                 continue
             rec[h] = row[i] if i < len(row) else None
+
         records.append(rec)
 
     df = pd.DataFrame(records)
+
     if df.empty:
-        raise ValueError("Daily_Data has no data rows under the header row.")
+        raise ValueError("Daily_Data has no usable rows.")
 
     if "Date" not in df.columns:
-        raise ValueError("Daily_Data missing Date column after parsing.")
+        raise ValueError("Daily_Data missing 'Date' column.")
 
     df = df[df["Date"].notna()].copy()
     df["Date"] = pd.to_datetime(df["Date"]).dt.date
