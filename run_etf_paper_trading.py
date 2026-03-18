@@ -45,6 +45,33 @@ def safe_float(value) -> Optional[float]:
         return None
 
 
+def read_daily_data_table(daily_ws) -> pd.DataFrame:
+    daily_rows = list(daily_ws.iter_rows(values_only=True))
+    if not daily_rows:
+        raise ValueError("Daily_Data sheet is empty.")
+
+    headers = [str(h).strip() if h is not None else "" for h in daily_rows[0]]
+    records = []
+    for row in daily_rows[1:]:
+        rec = {headers[i]: row[i] if i < len(row) else None for i in range(len(headers))}
+        records.append(rec)
+
+    daily_df = pd.DataFrame(records)
+    if daily_df.empty:
+        raise ValueError("Daily_Data sheet has no rows.")
+
+    required_cols = {"Date", "Ticker", "Open", "High", "Low", "Close"}
+    missing = required_cols - set(daily_df.columns)
+    if missing:
+        raise ValueError(f"Daily_Data missing required columns: {sorted(missing)}")
+
+    daily_df = daily_df[daily_df["Date"].notna()].copy()
+    daily_df["Date"] = pd.to_datetime(daily_df["Date"]).dt.date
+    daily_df["Ticker"] = daily_df["Ticker"].astype(str).str.upper().str.strip()
+
+    return daily_df
+
+
 def load_workbook_data(path: Path) -> Dict[str, object]:
     if not path.exists():
         raise FileNotFoundError(f"Workbook not found: {path}")
@@ -57,39 +84,17 @@ def load_workbook_data(path: Path) -> Dict[str, object]:
     signal_ws = wb["Signal"]
     daily_ws = wb["Daily_Data"]
 
-    # Dashboard cell mapping from your workbook
+    # Dashboard cells from your workbook
     primary_etf = normalize_etf(signal_ws["D23"].value)
     secondary_etf = normalize_etf(signal_ws["D24"].value)
     signal_date_raw = signal_ws["D27"].value
 
-    if signal_date_raw is None:
-        raise ValueError("Signal sheet missing Signal Date in cell D27.")
+    daily_df = read_daily_data_table(daily_ws)
 
-    signal_date = str(pd.to_datetime(signal_date_raw).date())
-
-    # Read Daily_Data as table
-    daily_rows = list(daily_ws.iter_rows(values_only=True))
-    if not daily_rows:
-        raise ValueError("Daily_Data sheet is empty.")
-
-    headers = [str(h).strip() if h is not None else "" for h in daily_rows[0]]
-    daily_records = []
-    for row in daily_rows[1:]:
-        rec = {headers[i]: row[i] if i < len(row) else None for i in range(len(headers))}
-        daily_records.append(rec)
-
-    daily_df = pd.DataFrame(daily_records)
-    if daily_df.empty:
-        raise ValueError("Daily_Data sheet has no rows.")
-
-    required_cols = {"Date", "Ticker", "Open", "High", "Low", "Close"}
-    missing = required_cols - set(daily_df.columns)
-    if missing:
-        raise ValueError(f"Daily_Data missing required columns: {sorted(missing)}")
-
-    daily_df = daily_df[daily_df["Date"].notna()].copy()
-    daily_df["Date"] = pd.to_datetime(daily_df["Date"]).dt.date
-    daily_df["Ticker"] = daily_df["Ticker"].astype(str).str.upper().str.strip()
+    if signal_date_raw is not None:
+        signal_date = str(pd.to_datetime(signal_date_raw).date())
+    else:
+        signal_date = str(daily_df["Date"].max())
 
     latest_daily_date = daily_df["Date"].max()
     latest_daily = daily_df[daily_df["Date"] == latest_daily_date].copy()
@@ -256,7 +261,7 @@ def build_exit_list(
             exits.append({"ticker": ticker, "reason": "regime_flip"})
             continue
 
-        # 2. Signal negative = no longer in current target set
+        # 2. Signal negative / no longer selected
         if ticker not in targets:
             exits.append({"ticker": ticker, "reason": "signal_negative"})
             continue
@@ -287,7 +292,6 @@ def exit_positions(
 
     remaining_rows = []
     trade_log_out = trade_log.copy()
-
     exit_map = {e["ticker"]: e["reason"] for e in exits}
 
     for _, row in positions.iterrows():
