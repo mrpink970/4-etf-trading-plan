@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 import pandas as pd
 from openpyxl import load_workbook
@@ -45,6 +45,65 @@ def determine_regime(primary_etf: str) -> str:
     return "neutral"
 
 
+def read_daily_data_wide(daily_ws) -> pd.DataFrame:
+    rows = list(daily_ws.iter_rows(values_only=True))
+    if not rows:
+        raise ValueError("Daily_Data sheet is empty.")
+
+    # Find the row that contains the actual headers by looking for "Date"
+    header_idx = None
+    for i, row in enumerate(rows):
+        values = [str(cell).strip() if cell is not None else "" for cell in row]
+        if "Date" in values:
+            header_idx = i
+            break
+
+    if header_idx is None:
+        raise ValueError("Could not find Daily_Data header row.")
+
+    headers = [str(h).strip() if h is not None else "" for h in rows[header_idx]]
+
+    records = []
+    for row in rows[header_idx + 1:]:
+        if all(v is None or str(v).strip() == "" for v in row):
+            continue
+
+        rec = {}
+        for i, h in enumerate(headers):
+            if h == "":
+                continue
+            rec[h] = row[i] if i < len(row) else None
+        records.append(rec)
+
+    df = pd.DataFrame(records)
+    if df.empty:
+        raise ValueError("Daily_Data has no usable data rows.")
+
+    if "Date" not in df.columns:
+        raise ValueError("Daily_Data missing Date column.")
+
+    df = df[df["Date"].notna()].copy()
+    df["Date"] = pd.to_datetime(df["Date"]).dt.date
+
+    return df
+
+
+def extract_latest_prices(df: pd.DataFrame) -> tuple[str, Dict[str, Dict[str, Optional[float]]]]:
+    latest_row = df.sort_values("Date").iloc[-1]
+    latest_date = str(latest_row["Date"])
+
+    prices: Dict[str, Dict[str, Optional[float]]] = {}
+    for etf in sorted(ALL_ETFS):
+        prices[etf] = {
+            "open": safe_float(latest_row.get(f"{etf} Open")),
+            "high": safe_float(latest_row.get(f"{etf} High")),
+            "low": safe_float(latest_row.get(f"{etf} Low")),
+            "close": safe_float(latest_row.get(f"{etf} Close")),
+        }
+
+    return latest_date, prices
+
+
 def load_workbook_state(path: Path) -> Dict[str, object]:
     if not path.exists():
         raise FileNotFoundError(f"Workbook not found: {path}")
@@ -64,116 +123,13 @@ def load_workbook_state(path: Path) -> Dict[str, object]:
     secondary_etf = normalize_text(signal_ws["D24"].value)
     signal_date_raw = signal_ws["D27"].value
 
-    rows = list(daily_ws.iter_rows(values_only=True))
-    if not rows:
-        raise ValueError("Daily_Data sheet is empty.")
-
-    # Find the actual header row (row that contains "Date")
-header_idx = None
-for i, row in enumerate(rows):
-    if any(str(cell).strip() == "Date" for cell in row if cell):
-        header_idx = i
-        break
-
-if header_idx is None:
-    raise ValueError("Could not find header row in Daily_Data")
-
-# Find the actual header row (row that contains "Date")
-header_idx = None
-for i, row in enumerate(rows):
-    if any(str(cell).strip() == "Date" for cell in row if cell):
-        header_idx = i
-        break
-
-if header_idx is None:
-    raise ValueError("Could not find header row in Daily_Data")
-
-# Find the actual header row (row that contains "Date")
-header_idx = None
-for i, row in enumerate(rows):
-    if any(str(cell).strip() == "Date" for cell in row if cell):
-        header_idx = i
-        break
-
-if header_idx is None:
-    raise ValueError("Could not find header row in Daily_Data")
-
-headers = [str(h).strip() if h is not None else "" for h in rows[header_idx]]
-
-data_rows = []
-for row in rows[header_idx + 1:]:
-    if all(v is None or str(v).strip() == "" for v in row):
-        continue
-
-    rec = {}
-    for i, h in enumerate(headers):
-        if h == "":
-            continue
-        rec[h] = row[i] if i < len(row) else None
-
-    data_rows.append(rec)
-
-data_rows = []
-for row in rows[header_idx + 1:]:
-    if all(v is None or str(v).strip() == "" for v in row):
-        continue
-
-    rec = {}
-    for i, h in enumerate(headers):
-        if h == "":
-            continue
-        rec[h] = row[i] if i < len(row) else None
-
-    data_rows.append(rec)
-
-data_rows = []
-for row in rows[header_idx + 1:]:
-    if all(v is None or str(v).strip() == "" for v in row):
-        continue
-
-    rec = {}
-    for i, h in enumerate(headers):
-        if h == "":
-            continue
-        rec[h] = row[i] if i < len(row) else None
-
-    data_rows.append(rec)
-
-    data_rows = []
-    for row in rows[1:]:
-        if all(v is None or str(v).strip() == "" for v in row):
-            continue
-        rec = {}
-        for i, h in enumerate(headers):
-            if h == "":
-                continue
-            rec[h] = row[i] if i < len(row) else None
-        data_rows.append(rec)
-
-    daily_df = pd.DataFrame(data_rows)
-    if daily_df.empty:
-        raise ValueError("Daily_Data has no usable data rows.")
-
-    if "Date" not in daily_df.columns:
-        raise ValueError("Daily_Data missing Date column.")
-
-    daily_df = daily_df[daily_df["Date"].notna()].copy()
-    daily_df["Date"] = pd.to_datetime(daily_df["Date"]).dt.date
-    latest_row = daily_df.sort_values("Date").iloc[-1]
+    daily_df = read_daily_data_wide(daily_ws)
+    daily_date, prices = extract_latest_prices(daily_df)
 
     if signal_date_raw is not None:
         signal_date = str(pd.to_datetime(signal_date_raw).date())
     else:
-        signal_date = str(latest_row["Date"])
-
-    prices: Dict[str, Dict[str, Optional[float]]] = {}
-    for etf in sorted(ALL_ETFS):
-        prices[etf] = {
-            "open": safe_float(latest_row.get(f"{etf} Open")),
-            "high": safe_float(latest_row.get(f"{etf} High")),
-            "low": safe_float(latest_row.get(f"{etf} Low")),
-            "close": safe_float(latest_row.get(f"{etf} Close")),
-        }
+        signal_date = daily_date
 
     return {
         "date": signal_date,
@@ -196,7 +152,9 @@ def load_positions() -> pd.DataFrame:
     ]
     if POSITIONS_PATH.exists():
         df = pd.read_csv(POSITIONS_PATH)
-        return df if not df.empty else pd.DataFrame(columns=cols)
+        if df.empty:
+            return pd.DataFrame(columns=cols)
+        return df
     return pd.DataFrame(columns=cols)
 
 
@@ -215,7 +173,9 @@ def load_trade_log() -> pd.DataFrame:
     ]
     if TRADE_LOG_PATH.exists():
         df = pd.read_csv(TRADE_LOG_PATH)
-        return df if not df.empty else pd.DataFrame(columns=cols)
+        if df.empty:
+            return pd.DataFrame(columns=cols)
+        return df
     return pd.DataFrame(columns=cols)
 
 
@@ -311,7 +271,10 @@ def save_performance(trade_log: pd.DataFrame) -> None:
     )[cols].to_csv(PERFORMANCE_PATH, index=False)
 
 
-def update_trailing_stops(positions: pd.DataFrame, prices: Dict[str, Dict[str, Optional[float]]]) -> pd.DataFrame:
+def update_trailing_stops(
+    positions: pd.DataFrame,
+    prices: Dict[str, Dict[str, Optional[float]]],
+) -> pd.DataFrame:
     if positions.empty:
         return positions
 
@@ -342,8 +305,8 @@ def build_exit_list(
     primary_etf: str,
     secondary_etf: str,
     prices: Dict[str, Dict[str, Optional[float]]],
-) -> List[Dict[str, str]]:
-    exits: List[Dict[str, str]] = []
+) -> list[dict[str, str]]:
+    exits: list[dict[str, str]] = []
 
     valid_targets = set()
     if primary_etf in ALL_ETFS:
@@ -355,19 +318,15 @@ def build_exit_list(
         ticker = normalize_text(row["ticker"])
         held_regime = normalize_text(row["regime"]).lower()
 
-        # 1. Regime flip exits all opposite-direction holdings
         if current_regime != "neutral" and held_regime != current_regime:
             exits.append({"ticker": ticker, "reason": "regime_flip"})
             continue
 
-        # 2. If signal no longer includes the ETF, exit
         if ticker not in valid_targets:
             exits.append({"ticker": ticker, "reason": "signal_negative"})
             continue
 
-        # 3. Trailing stop
-        px = prices.get(ticker, {})
-        low_price = px.get("low")
+        low_price = prices.get(ticker, {}).get("low")
         trailing_stop = safe_float(row["trailing_stop"])
         if low_price is not None and trailing_stop is not None and low_price <= trailing_stop:
             exits.append({"ticker": ticker, "reason": "trailing_stop"})
@@ -381,7 +340,7 @@ def build_exit_list(
 
 def apply_exits(
     positions: pd.DataFrame,
-    exits: List[Dict[str, str]],
+    exits: list[dict[str, str]],
     asof_date: str,
     prices: Dict[str, Dict[str, Optional[float]]],
     trade_log: pd.DataFrame,
@@ -423,20 +382,25 @@ def apply_exits(
         })
 
     remaining = pd.DataFrame(keep_rows)
+    if remaining.empty:
+        remaining = pd.DataFrame(columns=[
+            "ticker", "regime", "entry_date", "entry_price",
+            "shares", "highest_price", "trailing_stop"
+        ])
+
     updated_log = pd.concat([trade_log, pd.DataFrame(new_trades)], ignore_index=True)
 
     return remaining, updated_log
 
 
-def open_position_row(
+def build_position_row(
     ticker: str,
     regime: str,
     asof_date: str,
     prices: Dict[str, Dict[str, Optional[float]]],
-) -> Optional[Dict[str, object]]:
-    px = prices.get(ticker, {})
-    entry_price = px.get("open")
-    high_price = px.get("high")
+) -> Optional[dict[str, object]]:
+    entry_price = prices.get(ticker, {}).get("open")
+    high_price = prices.get(ticker, {}).get("high")
 
     if entry_price is None:
         return None
@@ -464,7 +428,6 @@ def apply_entries(
     asof_date: str,
     prices: Dict[str, Dict[str, Optional[float]]],
 ) -> pd.DataFrame:
-    # Only the ETF choices matter for entries
     if current_regime == "neutral":
         return positions
 
@@ -483,7 +446,7 @@ def apply_entries(
         if ticker in held:
             continue
 
-        row = open_position_row(ticker, current_regime, asof_date, prices)
+        row = build_position_row(ticker, current_regime, asof_date, prices)
         if row is None:
             continue
 
