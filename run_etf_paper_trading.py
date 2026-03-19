@@ -68,7 +68,76 @@ def load_workbook_state(path: Path) -> Dict[str, object]:
     if not rows:
         raise ValueError("Daily_Data sheet is empty.")
 
-    headers = [str(h).strip() if h is not None else "" for h in rows[0]]
+    # Find the actual header row (row that contains "Date")
+header_idx = None
+for i, row in enumerate(rows):
+    if any(str(cell).strip() == "Date" for cell in row if cell):
+        header_idx = i
+        break
+
+if header_idx is None:
+    raise ValueError("Could not find header row in Daily_Data")
+
+# Find the actual header row (row that contains "Date")
+header_idx = None
+for i, row in enumerate(rows):
+    if any(str(cell).strip() == "Date" for cell in row if cell):
+        header_idx = i
+        break
+
+if header_idx is None:
+    raise ValueError("Could not find header row in Daily_Data")
+
+# Find the actual header row (row that contains "Date")
+header_idx = None
+for i, row in enumerate(rows):
+    if any(str(cell).strip() == "Date" for cell in row if cell):
+        header_idx = i
+        break
+
+if header_idx is None:
+    raise ValueError("Could not find header row in Daily_Data")
+
+headers = [str(h).strip() if h is not None else "" for h in rows[header_idx]]
+
+data_rows = []
+for row in rows[header_idx + 1:]:
+    if all(v is None or str(v).strip() == "" for v in row):
+        continue
+
+    rec = {}
+    for i, h in enumerate(headers):
+        if h == "":
+            continue
+        rec[h] = row[i] if i < len(row) else None
+
+    data_rows.append(rec)
+
+data_rows = []
+for row in rows[header_idx + 1:]:
+    if all(v is None or str(v).strip() == "" for v in row):
+        continue
+
+    rec = {}
+    for i, h in enumerate(headers):
+        if h == "":
+            continue
+        rec[h] = row[i] if i < len(row) else None
+
+    data_rows.append(rec)
+
+data_rows = []
+for row in rows[header_idx + 1:]:
+    if all(v is None or str(v).strip() == "" for v in row):
+        continue
+
+    rec = {}
+    for i, h in enumerate(headers):
+        if h == "":
+            continue
+        rec[h] = row[i] if i < len(row) else None
+
+    data_rows.append(rec)
 
     data_rows = []
     for row in rows[1:]:
