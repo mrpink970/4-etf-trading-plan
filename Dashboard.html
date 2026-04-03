@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ETF Trading Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Inter',sans-serif;background:#0f0f12;color:#e4e4e7;padding:24px}
+  .container{max-width:1400px;margin:0 auto}
+  
+  /* Cards */
+  .card{background:#1a1a1f;border-radius:20px;padding:24px;border:1px solid #2a2a30;margin-bottom:20px}
+  .card-header{display:flex;align-items:center;gap:12px;margin-bottom:20px;padding-bottom:12px;border-bottom:1px solid #2a2a30}
+  .card-header h2{font-size:18px;font-weight:600}
+  .card-header .icon{font-size:22px}
+  
+  /* Grids */
+  .kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:20px}
+  .kpi{background:#131318;border-radius:16px;padding:20px;border:1px solid #25252b}
+  .kpi-label{font-size:12px;font-weight:500;color:#71717a;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px}
+  .kpi-value{font-size:28px;font-weight:700;font-family:'JetBrains Mono',monospace}
+  .kpi-change{font-size:12px;margin-top:6px}
+  .positive{color:#22c55e}
+  .negative{color:#ef4444}
+  .neutral{color:#71717a}
+  
+  /* Tables */
+  table{width:100%;border-collapse:collapse}
+  th{text-align:left;padding:12px 8px;font-size:12px;font-weight:600;color:#71717a;border-bottom:1px solid #2a2a30}
+  td{padding:12px 8px;font-size:13px;border-bottom:1px solid #25252b}
+  tr:hover{background:#131318}
+  
+  /* Sector cards */
+  .sector-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+  .sector-card{background:#131318;border-radius:14px;padding:16px;border:1px solid #25252b;cursor:pointer;transition:all .2s}
+  .sector-card:hover{transform:translateY(-2px);border-color:#3a3a44}
+  .sector-name{font-weight:600;font-size:14px;margin-bottom:12px}
+  .sector-status{display:inline-block;padding:4px 10px;border-radius:20px;font-size:11px;font-weight:600}
+  .status-bull{background:#22c55e20;color:#22c55e;border:1px solid #22c55e40}
+  .status-bear{background:#ef444420;color:#ef4444;border:1px solid #ef444440}
+  .sector-score{font-size:20px;font-weight:700;margin-top:10px}
+  .sector-signal{font-size:11px;color:#71717a;margin-top:8px}
+  
+  .badge{display:inline-block;padding:4px 10px;border-radius:12px;font-size:11px;font-weight:500}
+  .badge-bull{background:#22c55e20;color:#22c55e}
+  .badge-bear{background:#ef444420;color:#ef4444}
+  
+  .empty-state{text-align:center;padding:48px;color:#71717a}
+  
+  @media(max-width:768px){body{padding:16px}.kpi-value{font-size:22px}}
+</style>
+</head>
+<body>
+
+<div class="container">
+  
+  <!-- Header -->
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;flex-wrap:wrap;gap:12px">
+    <div>
+      <h1 style="font-size:24px;font-weight:700">📊 ETF Trading Dashboard</h1>
+      <p style="color:#71717a;font-size:13px;margin-top:4px">Paper Trading | 3x Leveraged ETFs | Trailing Stop System</p>
+    </div>
+    <div id="datetime" style="font-family:'JetBrains Mono';font-size:13px;color:#71717a;background:#1a1a1f;padding:8px 16px;border-radius:12px"></div>
+  </div>
+  
+  <!-- QQQ Regime Banner (placeholder) -->
+  <div id="regime-banner" class="card" style="background:linear-gradient(135deg,#1e1e2f 0%,#2d2d4e 100%);border:none;margin-bottom:20px">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <div style="width:12px;height:12px;border-radius:50%;background:#22c55e;box-shadow:0 0 8px #22c55e"></div>
+      <div><strong>QQQ MARKET REGIME: BULL</strong> <span style="color:#a1a1aa;font-size:13px">| Score: +2</span></div>
+      <div style="font-size:13px;color:#a1a1aa">New entries allowed</div>
+    </div>
+  </div>
+  
+  <!-- KPI Cards -->
+  <div class="kpi-grid" id="kpi-container">
+    <div class="kpi"><div class="kpi-label">Account Balance</div><div class="kpi-value" id="balance">$5,000</div><div class="kpi-change" id="daily-pnl">Today: $0</div></div>
+    <div class="kpi"><div class="kpi-label">Net Profit</div><div class="kpi-value" id="net-profit">$0</div><div class="kpi-change" id="profit-pct">(0.0%)</div></div>
+    <div class="kpi"><div class="kpi-label">Win Rate</div><div class="kpi-value" id="win-rate">0.0%</div><div class="kpi-change">0 total trades</div></div>
+    <div class="kpi"><div class="kpi-label">Expectancy</div><div class="kpi-value" id="expectancy">0.0%</div><div class="kpi-change">per trade</div></div>
+    <div class="kpi"><div class="kpi-label">Open Positions</div><div class="kpi-value" id="open-count">0</div><div class="kpi-change" id="unrealized-pnl">Unrealized: $0</div></div>
+  </div>
+  
+  <!-- Open Positions -->
+  <div class="card">
+    <div class="card-header"><span class="icon">📈</span><h2>Open Positions</h2></div>
+    <div id="positions-container">
+      <div class="empty-state">No open positions. Waiting for signals.</div>
+    </div>
+  </div>
+  
+  <!-- Sector Signals -->
+  <div class="card">
+    <div class="card-header"><span class="icon">⚡</span><h2>Sector Signals</h2></div>
+    <div class="sector-grid" id="sectors-container">
+      <!-- Will be populated dynamically -->
+    </div>
+    <div style="font-size:11px;color:#71717a;margin-top:16px;padding-top:12px;border-top:1px solid #2a2a30">
+      💡 Hover cards for breakdown | Score range: -7 (strong bear) to +7 (strong bull)
+    </div>
+  </div>
+  
+  <!-- Recent Trades -->
+  <div class="card">
+    <div class="card-header"><span class="icon">📋</span><h2>Recent Closed Trades</h2></div>
+    <div id="trades-container">
+      <div class="empty-state">No closed trades yet.</div>
+    </div>
+  </div>
+  
+  <!-- Performance Metrics -->
+  <div class="card">
+    <div class="card-header"><span class="icon">📊</span><h2>Performance Metrics</h2></div>
+    <div id="metrics-container">
+      <div class="empty-state">Awaiting trade data...</div>
+    </div>
+  </div>
+  
+  <!-- Footer -->
+  <div class="card" style="background:#131318">
+    <div style="font-size:12px;color:#71717a;text-align:center">
+      System: 3x Leveraged ETFs (SOXL/SOXS/TQQQ/SQQQ) | Trailing stop: 12% | Max positions: 2<br>
+      Data source: Yahoo Finance | Last updated: <span id="last-update">--</span>
+    </div>
+  </div>
+  
+</div>
+
+<script>
+  // Sector configuration
+  const sectors = [
+    { name: "Semiconductors", etf: "SMH", bull_etf: "SOXL", bear_etf: "SOXS", score: 0, components: {} },
+    { name: "Biotechnology", etf: "XBI", bull_etf: "LABU", bear_etf: "LABD", score: 0, components: {} },
+    { name: "Consumer Discretionary", etf: "XLY", bull_etf: "WANT", bear_etf: "WANT", score: 0, components: {} },
+    { name: "Communication Services", etf: "XLC", bull_etf: "LTL", bear_etf: "LTL", score: 0, components: {} },
+    { name: "Healthcare", etf: "XLV", bull_etf: "CURE", bear_etf: "CURE", score: 0, components: {} }
+  ];
+  
+  // Current prices cache
+  let currentPrices = {};
+  
+  // Fetch current prices from Yahoo Finance
+  async function fetchPrices(tickers) {
+    const uniqueTickers = [...new Set(tickers)];
+    const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${uniqueTickers.join(',')}`;
+    try {
+      const response = await fetch(url);
+      const data = await response.json();
+      const results = data.quoteResponse.result || [];
+      results.forEach(r => { currentPrices[r.symbol] = r.regularMarketPrice; });
+    } catch(e) { console.error("Price fetch error:", e); }
+  }
+  
+  // Calculate sector score based on technicals (simplified - can be expanded)
+  async function calculateSectorScore(sector) {
+    // This would normally fetch historical data and calculate
+    // For now, return a random-ish score based on recent performance
+    // You can replace this with your actual scoring logic
+    try {
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${sector.etf}?range=1mo&interval=1d`;
+      const response = await fetch(url);
+      const data = await response.json();
+      const closes = data.chart.result[0].indicators.quote[0].close;
+      if (closes && closes.length > 20) {
+        const recent = closes.slice(-5);
+        const avgChange = (recent[recent.length-1] / recent[0] - 1) * 100;
+        // Simple scoring: positive momentum = bull, negative = bear
+        let score = 0;
+        if (avgChange > 2) score = 5;
+        else if (avgChange > 0) score = 2;
+        else if (avgChange > -2) score = -2;
+        else score = -5;
+        return { score, components: { momentum: avgChange } };
+      }
+    } catch(e) { console.error(`Error calculating ${sector.etf}:`, e); }
+    return { score: 0, components: {} };
+  }
+  
+  // Parse CSV string to array
+  function parseCSV(csvText) {
+    const lines = csvText.trim().split('\n');
+    const headers = lines[0].split(',');
+    return lines.slice(1).map(line => {
+      const values = line.split(',');
+      const obj = {};
+      headers.forEach((h, i) => { obj[h.trim()] = values[i]?.trim() || ''; });
+      return obj;
+    });
+  }
+  
+  // Load CSV files (simulated - in GitHub Pages you'd fetch actual files)
+  // For local testing, you'll need to serve these files or embed data
+  async function loadCSVData() {
+    // In a real deployment, you'd fetch from your repo:
+    // const positionsResp = await fetch('etf_paper_positions.csv');
+    // const positionsData = await positionsResp.text();
+    
+    // For demo, using embedded data from your actual system
+    const positionsData = `ticker,regime,entry_date,entry_price,shares,highest_price,trailing_stop
+SOXL,bull,2026-04-03,46.060001,100,53.07,46.7016
+TQQQ,bull,2026-04-03,40.880001,100,43.549999,38.323999`;
+    
+    const tradeLogData = `ticker,regime,entry_date,entry_price,exit_date,exit_price,shares,gross_pl,return_pct,exit_reason`;
+    
+    const performanceData = `total_trades,win_rate,loss_rate,avg_gain_pct,avg_loss_pct,largest_gain_pct,largest_loss_pct,total_gross_pl,expectancy_pct
+0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0`;
+    
+    return {
+      positions: parseCSV(positionsData),
+      trades: parseCSV(tradeLogData),
+      performance: parseCSV(performanceData)[0]
+    };
+  }
+  
+  // Update dashboard with data
+  async function updateDashboard() {
+    const data = await loadCSVData();
+    const positions = data.positions.filter(p => p.ticker && p.ticker !== 'ticker');
+    
+    // Get current prices for positions
+    const positionTickers = positions.map(p => p.ticker);
+    if (positionTickers.length) await fetchPrices(positionTickers);
+    
+    // Calculate unrealized P&L
+    let totalUnrealized = 0;
+    positions.forEach(p => {
+      const currentPrice = currentPrices[p.ticker] || parseFloat(p.entry_price);
+      const entryPrice = parseFloat(p.entry_price);
+      const shares = parseInt(p.shares);
+      totalUnrealized += (currentPrice - entryPrice) * shares;
+    });
+    
+    // Update KPIs
+    const perf = data.performance;
+    const totalTrades = parseInt(perf.total_trades) || 0;
+    const winRate = (parseFloat(perf.win_rate) * 100).toFixed(1);
+    const balance = 5000 + totalUnrealized;
+    
+    document.getElementById('balance').innerHTML = `$${balance.toFixed(2)}`;
+    document.getElementById('net-profit').innerHTML = `$${totalUnrealized.toFixed(2)}`;
+    document.getElementById('profit-pct').innerHTML = `(${(totalUnrealized/5000*100).toFixed(1)}%)`;
+    document.getElementById('win-rate').innerHTML = totalTrades ? `${winRate}%` : '0.0%';
+    document.getElementById('expectancy').innerHTML = totalTrades ? `${(parseFloat(perf.expectancy_pct)||0).toFixed(1)}%` : '0.0%';
+    document.getElementById('open-count').innerHTML = positions.length;
+    document.getElementById('unrealized-pnl').innerHTML = `Unrealized: ${totalUnrealized >= 0 ? '+' : ''}$${totalUnrealized.toFixed(2)}`;
+    document.getElementById('daily-pnl').innerHTML = `Today: ${totalUnrealized >= 0 ? '+' : ''}$${totalUnrealized.toFixed(2)}`;
+    
+    // Render positions table
+    const positionsContainer = document.getElementById('positions-container');
+    if (positions.length === 0) {
+      positionsContainer.innerHTML = '<div class="empty-state">No open positions. Waiting for signals.</div>';
+    } else {
+      positionsContainer.innerHTML = `
+        <table>
+          <thead><tr><th>Ticker</th><th>Regime</th><th>Entry Date</th><th>Entry Price</th><th>Current Price</th><th>Shares</th><th>Unrealized P&L</th><th>Trailing Stop</th></tr></thead>
+          <tbody>
+            ${positions.map(p => {
+              const currentPrice = currentPrices[p.ticker] || parseFloat(p.entry_price);
+              const entryPrice = parseFloat(p.entry_price);
+              const pl = (currentPrice - entryPrice) * parseInt(p.shares);
+              return `<tr>
+                <td><strong>${p.ticker}</strong></td>
+                <td><span class="badge ${p.regime === 'bull' ? 'badge-bull' : 'badge-bear'}">${p.regime.toUpperCase()}</span></td>
+                <td>${p.entry_date}</td>
+                <td>$${entryPrice.toFixed(2)}</td>
+                <td>$${currentPrice.toFixed(2)}</td>
+                <td>${p.shares}</td>
+                <td class="${pl >= 0 ? 'positive' : 'negative'}">${pl >= 0 ? '+' : ''}$${pl.toFixed(2)}</td>
+                <td>$${parseFloat(p.trailing_stop).toFixed(2)}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+    
+    // Render trades (empty for now)
+    const tradesContainer = document.getElementById('trades-container');
+    if (data.trades.length === 0 || (data.trades.length === 1 && !data.trades[0].ticker)) {
+      tradesContainer.innerHTML = '<div class="empty-state">No closed trades yet.</div>';
+    } else {
+      tradesContainer.innerHTML = `<table><thead><tr><th>Date</th><th>Ticker</th><th>Entry</th><th>Exit</th><th>Return</th><th>Reason</th></tr></thead><tbody>
+        ${data.trades.map(t => `<tr><td>${t.exit_date}</td><td>${t.ticker}</td><td>$${parseFloat(t.entry_price).toFixed(2)}</td><td>$${parseFloat(t.exit_price).toFixed(2)}</td><td class="${parseFloat(t.return_pct) >= 0 ? 'positive' : 'negative'}">${parseFloat(t.return_pct).toFixed(1)}%</td><td>${t.exit_reason}</td></tr>`).join('')}
+      </tbody></table>`;
+    }
+    
+    // Update sector signals
+    await updateSectors();
+    
+    // Set timestamp
+    document.getElementById('datetime').innerHTML = new Date().toLocaleString();
+    document.getElementById('last-update').innerHTML = new Date().toLocaleTimeString();
+  }
+  
+  // Update sector signals (simplified - replace with your actual logic)
+  async function updateSectors() {
+    const sectorEtfs = sectors.map(s => s.etf);
+    await fetchPrices(sectorEtfs);
+    
+    const sectorsContainer = document.getElementById('sectors-container');
+    sectorsContainer.innerHTML = sectors.map(sector => {
+      const currentPrice = currentPrices[sector.etf] || 100;
+      // Simple scoring based on price relative to 50-day (simplified)
+      const isBull = currentPrice > 100; // placeholder logic
+      const score = isBull ? 3 : -3;
+      const status = isBull ? 'BULL' : 'BEAR';
+      const signalETF = isBull ? sector.bull_etf : sector.bear_etf;
+      
+      return `
+        <div class="sector-card">
+          <div class="sector-name">${sector.name}</div>
+          <div><span class="sector-status ${isBull ? 'status-bull' : 'status-bear'}">${status}</span></div>
+          <div class="sector-score ${isBull ? 'positive' : 'negative'}">${isBull ? '+' : ''}${score}</div>
+          <div class="sector-signal">Signal: ${sector.etf} → ${signalETF}</div>
+          <div class="sector-signal" style="margin-top:4px">${isBull ? '✅ Tradable' : '❌ Not tradable'}</div>
+        </div>
+      `;
+    }).join('');
+  }
+  
+  // Initialize
+  updateDashboard();
+  setInterval(updateDashboard, 60000); // Refresh every minute
+</script>
+</body>
+</html>
