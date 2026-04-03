@@ -26,6 +26,10 @@ jobs:
           pip install openpyxl pandas
 
       - name: Run ETF paper trading
+        env:
+          MAIL_USERNAME: ${{ secrets.MAIL_USERNAME }}
+          MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
         run: |
           python run_etf_paper_trading.py
 
