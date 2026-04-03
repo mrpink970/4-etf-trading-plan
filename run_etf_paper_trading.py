@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Dict, Optional
+import os
 
 import pandas as pd
 from openpyxl import load_workbook
@@ -122,6 +123,11 @@ def load_workbook_state(path: Path) -> Dict[str, object]:
     primary_etf = normalize_text(signal_ws["D23"].value)
     secondary_etf = normalize_text(signal_ws["D24"].value)
     signal_date_raw = signal_ws["D27"].value
+
+    # DEBUG: Print what we found
+    print(f"DEBUG: D23 (Primary ETF) = '{primary_etf}' (raw: {signal_ws['D23'].value})")
+    print(f"DEBUG: D24 (Secondary ETF) = '{secondary_etf}' (raw: {signal_ws['D24'].value})")
+    print(f"DEBUG: D27 (Signal Date) = '{signal_date_raw}'")
 
     daily_df = read_daily_data_wide(daily_ws)
     daily_date, prices = extract_latest_prices(daily_df)
@@ -309,26 +315,33 @@ def build_exit_list(
     exits: list[dict[str, str]] = []
 
     valid_targets = set()
-    if primary_etf in ALL_ETFS:
+    if primary_etf in ALL_ETFS and primary_etf != "WAIT":
         valid_targets.add(primary_etf)
-    if secondary_etf in ALL_ETFS:
+    if secondary_etf in ALL_ETFS and secondary_etf != "WAIT":
         valid_targets.add(secondary_etf)
+
+    print(f"DEBUG: valid_targets = {valid_targets}")
 
     for _, row in positions.iterrows():
         ticker = normalize_text(row["ticker"])
         held_regime = normalize_text(row["regime"]).lower()
 
+        print(f"DEBUG: Checking exit for {ticker}, current_regime={current_regime}, held_regime={held_regime}")
+
         if current_regime != "neutral" and held_regime != current_regime:
+            print(f"DEBUG: Exit {ticker} - regime_flip")
             exits.append({"ticker": ticker, "reason": "regime_flip"})
             continue
 
         if ticker not in valid_targets:
+            print(f"DEBUG: Exit {ticker} - signal_negative (not in {valid_targets})")
             exits.append({"ticker": ticker, "reason": "signal_negative"})
             continue
 
         low_price = prices.get(ticker, {}).get("low")
         trailing_stop = safe_float(row["trailing_stop"])
         if low_price is not None and trailing_stop is not None and low_price <= trailing_stop:
+            print(f"DEBUG: Exit {ticker} - trailing_stop (low={low_price} <= stop={trailing_stop})")
             exits.append({"ticker": ticker, "reason": "trailing_stop"})
             continue
 
@@ -429,6 +442,7 @@ def apply_entries(
     prices: Dict[str, Dict[str, Optional[float]]],
 ) -> pd.DataFrame:
     if current_regime == "neutral":
+        print(f"DEBUG: current_regime='{current_regime}' - SKIPPING entries")
         return positions
 
     current = positions.copy()
@@ -440,16 +454,24 @@ def apply_entries(
     if secondary_etf in ALL_ETFS and secondary_etf != "WAIT":
         desired.append(secondary_etf)
 
+    print(f"DEBUG: desired ETFs = {desired}")
+    print(f"DEBUG: currently held = {held}")
+    print(f"DEBUG: current positions count = {len(current)}")
+
     for ticker in desired:
         if len(current) >= MAX_TRADES:
+            print(f"DEBUG: MAX_TRADES reached ({MAX_TRADES}), stopping entries")
             break
         if ticker in held:
+            print(f"DEBUG: {ticker} already held, skipping")
             continue
 
         row = build_position_row(ticker, current_regime, asof_date, prices)
         if row is None:
+            print(f"DEBUG: Could not build position row for {ticker} (missing price data?)")
             continue
 
+        print(f"DEBUG: ENTERING {ticker} at price {row['entry_price']}")
         current = pd.concat([current, pd.DataFrame([row])], ignore_index=True)
         held.add(ticker)
 
@@ -457,6 +479,10 @@ def apply_entries(
 
 
 def main() -> None:
+    print("=" * 50)
+    print("ETF PAPER TRADING DEBUG RUN")
+    print("=" * 50)
+    
     state = load_workbook_state(WORKBOOK_PATH)
 
     asof_date = state["date"]
@@ -465,8 +491,19 @@ def main() -> None:
     current_regime = state["regime"]
     prices = state["prices"]
 
+    print(f"\nASOF_DATE: {asof_date}")
+    print(f"PRIMARY ETF: {primary_etf}")
+    print(f"SECONDARY ETF: {secondary_etf}")
+    print(f"REGIME: {current_regime}")
+    print(f"PRICES: {prices}\n")
+
     positions = load_positions()
     trade_log = load_trade_log()
+    
+    print(f"EXISTING POSITIONS: {len(positions)}")
+    if not positions.empty:
+        print(positions)
+    print(f"TRADE LOG COUNT: {len(trade_log)}\n")
 
     positions = update_trailing_stops(positions, prices)
 
@@ -477,6 +514,10 @@ def main() -> None:
         secondary_etf=secondary_etf,
         prices=prices,
     )
+    
+    print(f"\nEXITS TO PROCESS: {len(exits)}")
+    if exits:
+        print(exits)
 
     positions, trade_log = apply_exits(
         positions=positions,
@@ -485,6 +526,8 @@ def main() -> None:
         prices=prices,
         trade_log=trade_log,
     )
+    
+    print(f"\nPOSITIONS AFTER EXITS: {len(positions)}")
 
     positions = apply_entries(
         positions=positions,
@@ -494,17 +537,20 @@ def main() -> None:
         asof_date=asof_date,
         prices=prices,
     )
+    
+    print(f"\nPOSITIONS AFTER ENTRIES: {len(positions)}")
 
     save_positions(positions)
     save_trade_log(trade_log)
     save_performance(trade_log)
 
-    print(f"ETF paper trading updated for {asof_date}")
+    print(f"\nETF paper trading updated for {asof_date}")
     print(f"Primary ETF: {primary_etf}")
     print(f"Secondary ETF: {secondary_etf}")
     print(f"Regime: {current_regime}")
     print(f"Open positions: {len(positions)}")
     print(f"Closed trades logged: {len(trade_log)}")
+    print("=" * 50)
 
 
 if __name__ == "__main__":
