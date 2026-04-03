@@ -23,7 +23,7 @@ jobs:
 
       - name: Install packages
         run: |
-          pip install openpyxl pandas yfinance
+          pip install openpyxl pandas
 
       - name: Run ETF paper trading
         run: |
