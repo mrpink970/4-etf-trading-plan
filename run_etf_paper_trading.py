@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Dict, Optional
-import os
 
 import pandas as pd
 from openpyxl import load_workbook
@@ -51,6 +50,12 @@ def read_daily_data_wide(daily_ws) -> pd.DataFrame:
     if not rows:
         raise ValueError("Daily_Data sheet is empty.")
 
+    # DEBUG: Print first 3 rows to see structure
+    print("DEBUG: First 3 rows of Daily_Data:")
+    for i, row in enumerate(rows[:3]):
+        if row:
+            print(f"  Row {i}: {row[:8]}")  # First 8 columns
+
     # Find the row that contains the actual headers by looking for "Date"
     header_idx = None
     for i, row in enumerate(rows):
@@ -63,6 +68,7 @@ def read_daily_data_wide(daily_ws) -> pd.DataFrame:
         raise ValueError("Could not find Daily_Data header row.")
 
     headers = [str(h).strip() if h is not None else "" for h in rows[header_idx]]
+    print(f"DEBUG: Found headers: {headers[:8]}")  # First 8 headers
 
     records = []
     for row in rows[header_idx + 1:]:
@@ -85,22 +91,55 @@ def read_daily_data_wide(daily_ws) -> pd.DataFrame:
 
     df = df[df["Date"].notna()].copy()
     df["Date"] = pd.to_datetime(df["Date"]).dt.date
-
+    
+    print(f"DEBUG: Loaded {len(df)} rows of data")
     return df
 
 
 def extract_latest_prices(df: pd.DataFrame) -> tuple[str, Dict[str, Dict[str, Optional[float]]]]:
     latest_row = df.sort_values("Date").iloc[-1]
     latest_date = str(latest_row["Date"])
+    
+    print(f"DEBUG: Latest date = {latest_date}")
+    print(f"DEBUG: Available columns sample: {list(df.columns)[:10]}")
 
     prices: Dict[str, Dict[str, Optional[float]]] = {}
     for etf in sorted(ALL_ETFS):
+        # Try both underscore and space formats
+        open_col_underscore = f"{etf}_Open"
+        high_col_underscore = f"{etf}_High"
+        low_col_underscore = f"{etf}_Low"
+        close_col_underscore = f"{etf}_Close"
+        
+        open_col_space = f"{etf} Open"
+        high_col_space = f"{etf} High"
+        low_col_space = f"{etf} Low"
+        close_col_space = f"{etf} Close"
+        
+        # Try underscore format first, then space format
+        open_val = latest_row.get(open_col_underscore)
+        if open_val is None:
+            open_val = latest_row.get(open_col_space)
+            
+        high_val = latest_row.get(high_col_underscore)
+        if high_val is None:
+            high_val = latest_row.get(high_col_space)
+            
+        low_val = latest_row.get(low_col_underscore)
+        if low_val is None:
+            low_val = latest_row.get(low_col_space)
+            
+        close_val = latest_row.get(close_col_underscore)
+        if close_val is None:
+            close_val = latest_row.get(close_col_space)
+        
         prices[etf] = {
-            "open": safe_float(latest_row.get(f"{etf} Open")),
-            "high": safe_float(latest_row.get(f"{etf} High")),
-            "low": safe_float(latest_row.get(f"{etf} Low")),
-            "close": safe_float(latest_row.get(f"{etf} Close")),
+            "open": safe_float(open_val),
+            "high": safe_float(high_val),
+            "low": safe_float(low_val),
+            "close": safe_float(close_val),
         }
+        print(f"DEBUG: {etf} - Open:{prices[etf]['open']}, Close:{prices[etf]['close']}")
 
     return latest_date, prices
 
@@ -416,6 +455,7 @@ def build_position_row(
     high_price = prices.get(ticker, {}).get("high")
 
     if entry_price is None:
+        print(f"DEBUG: No entry price for {ticker}")
         return None
     if high_price is None:
         high_price = entry_price
