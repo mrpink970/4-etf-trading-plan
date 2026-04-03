@@ -3,6 +3,10 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Dict, Optional
+import os
+import smtplib
+from email.message import EmailMessage
+from datetime import datetime
 
 import pandas as pd
 from openpyxl import load_workbook
@@ -50,12 +54,6 @@ def read_daily_data_wide(daily_ws) -> pd.DataFrame:
     if not rows:
         raise ValueError("Daily_Data sheet is empty.")
 
-    # DEBUG: Print first 3 rows to see structure
-    print("DEBUG: First 3 rows of Daily_Data:")
-    for i, row in enumerate(rows[:3]):
-        if row:
-            print(f"  Row {i}: {row[:8]}")  # First 8 columns
-
     # Find the row that contains the actual headers by looking for "Date"
     header_idx = None
     for i, row in enumerate(rows):
@@ -68,7 +66,6 @@ def read_daily_data_wide(daily_ws) -> pd.DataFrame:
         raise ValueError("Could not find Daily_Data header row.")
 
     headers = [str(h).strip() if h is not None else "" for h in rows[header_idx]]
-    print(f"DEBUG: Found headers: {headers[:8]}")  # First 8 headers
 
     records = []
     for row in rows[header_idx + 1:]:
@@ -91,17 +88,13 @@ def read_daily_data_wide(daily_ws) -> pd.DataFrame:
 
     df = df[df["Date"].notna()].copy()
     df["Date"] = pd.to_datetime(df["Date"]).dt.date
-    
-    print(f"DEBUG: Loaded {len(df)} rows of data")
+
     return df
 
 
 def extract_latest_prices(df: pd.DataFrame) -> tuple[str, Dict[str, Dict[str, Optional[float]]]]:
     latest_row = df.sort_values("Date").iloc[-1]
     latest_date = str(latest_row["Date"])
-    
-    print(f"DEBUG: Latest date = {latest_date}")
-    print(f"DEBUG: Available columns sample: {list(df.columns)[:10]}")
 
     prices: Dict[str, Dict[str, Optional[float]]] = {}
     for etf in sorted(ALL_ETFS):
@@ -116,7 +109,6 @@ def extract_latest_prices(df: pd.DataFrame) -> tuple[str, Dict[str, Dict[str, Op
         low_col_space = f"{etf} Low"
         close_col_space = f"{etf} Close"
         
-        # Try underscore format first, then space format
         open_val = latest_row.get(open_col_underscore)
         if open_val is None:
             open_val = latest_row.get(open_col_space)
@@ -139,7 +131,6 @@ def extract_latest_prices(df: pd.DataFrame) -> tuple[str, Dict[str, Dict[str, Op
             "low": safe_float(low_val),
             "close": safe_float(close_val),
         }
-        print(f"DEBUG: {etf} - Open:{prices[etf]['open']}, Close:{prices[etf]['close']}")
 
     return latest_date, prices
 
@@ -158,15 +149,9 @@ def load_workbook_state(path: Path) -> Dict[str, object]:
     signal_ws = wb["Signal"]
     daily_ws = wb["Daily_Data"]
 
-    # Fixed dashboard cells from your workbook
     primary_etf = normalize_text(signal_ws["D23"].value)
     secondary_etf = normalize_text(signal_ws["D24"].value)
     signal_date_raw = signal_ws["D27"].value
-
-    # DEBUG: Print what we found
-    print(f"DEBUG: D23 (Primary ETF) = '{primary_etf}' (raw: {signal_ws['D23'].value})")
-    print(f"DEBUG: D24 (Secondary ETF) = '{secondary_etf}' (raw: {signal_ws['D24'].value})")
-    print(f"DEBUG: D27 (Signal Date) = '{signal_date_raw}'")
 
     daily_df = read_daily_data_wide(daily_ws)
     daily_date, prices = extract_latest_prices(daily_df)
@@ -359,28 +344,21 @@ def build_exit_list(
     if secondary_etf in ALL_ETFS and secondary_etf != "WAIT":
         valid_targets.add(secondary_etf)
 
-    print(f"DEBUG: valid_targets = {valid_targets}")
-
     for _, row in positions.iterrows():
         ticker = normalize_text(row["ticker"])
         held_regime = normalize_text(row["regime"]).lower()
 
-        print(f"DEBUG: Checking exit for {ticker}, current_regime={current_regime}, held_regime={held_regime}")
-
         if current_regime != "neutral" and held_regime != current_regime:
-            print(f"DEBUG: Exit {ticker} - regime_flip")
             exits.append({"ticker": ticker, "reason": "regime_flip"})
             continue
 
         if ticker not in valid_targets:
-            print(f"DEBUG: Exit {ticker} - signal_negative (not in {valid_targets})")
             exits.append({"ticker": ticker, "reason": "signal_negative"})
             continue
 
         low_price = prices.get(ticker, {}).get("low")
         trailing_stop = safe_float(row["trailing_stop"])
         if low_price is not None and trailing_stop is not None and low_price <= trailing_stop:
-            print(f"DEBUG: Exit {ticker} - trailing_stop (low={low_price} <= stop={trailing_stop})")
             exits.append({"ticker": ticker, "reason": "trailing_stop"})
             continue
 
@@ -455,7 +433,6 @@ def build_position_row(
     high_price = prices.get(ticker, {}).get("high")
 
     if entry_price is None:
-        print(f"DEBUG: No entry price for {ticker}")
         return None
     if high_price is None:
         high_price = entry_price
@@ -482,7 +459,6 @@ def apply_entries(
     prices: Dict[str, Dict[str, Optional[float]]],
 ) -> pd.DataFrame:
     if current_regime == "neutral":
-        print(f"DEBUG: current_regime='{current_regime}' - SKIPPING entries")
         return positions
 
     current = positions.copy()
@@ -494,59 +470,150 @@ def apply_entries(
     if secondary_etf in ALL_ETFS and secondary_etf != "WAIT":
         desired.append(secondary_etf)
 
-    print(f"DEBUG: desired ETFs = {desired}")
-    print(f"DEBUG: currently held = {held}")
-    print(f"DEBUG: current positions count = {len(current)}")
-
     for ticker in desired:
         if len(current) >= MAX_TRADES:
-            print(f"DEBUG: MAX_TRADES reached ({MAX_TRADES}), stopping entries")
             break
         if ticker in held:
-            print(f"DEBUG: {ticker} already held, skipping")
             continue
 
         row = build_position_row(ticker, current_regime, asof_date, prices)
         if row is None:
-            print(f"DEBUG: Could not build position row for {ticker} (missing price data?)")
             continue
 
-        print(f"DEBUG: ENTERING {ticker} at price {row['entry_price']}")
         current = pd.concat([current, pd.DataFrame([row])], ignore_index=True)
         held.add(ticker)
 
     return current
 
 
+def send_email_summary(asof_date: str, primary_etf: str, secondary_etf: str, 
+                       regime: str, positions: pd.DataFrame, trade_log: pd.DataFrame,
+                       new_entries: list = None, new_exits: list = None) -> None:
+    """Send email summary with trading activity"""
+    
+    # Check if email credentials are available
+    mail_username = os.environ.get("MAIL_USERNAME")
+    mail_password = os.environ.get("MAIL_PASSWORD")
+    mail_to = os.environ.get("MAIL_TO")
+    
+    if not mail_username or not mail_password or not mail_to:
+        print("Email credentials not found. Skipping email notification.")
+        return
+    
+    # Build email body
+    body = f"""
+═══════════════════════════════════════════════════════════
+  ETF PAPER TRADING UPDATE - {asof_date}
+═══════════════════════════════════════════════════════════
+
+📊 MARKET REGIME: {regime.upper()}
+🎯 SIGNAL: {primary_etf} / {secondary_etf}
+
+"""
+    
+    # New entries
+    if new_entries and len(new_entries) > 0:
+        body += "🟢 NEW ENTRIES:\n"
+        for entry in new_entries:
+            body += f"   • {entry['ticker']}: {entry['shares']} shares @ ${entry['price']:.2f}\n"
+            body += f"     Stop: ${entry['stop']:.2f}\n"
+        body += "\n"
+    
+    # New exits (closed trades today)
+    if new_exits and len(new_exits) > 0:
+        body += "🔴 POSITIONS CLOSED:\n"
+        for exit_trade in new_exits:
+            pl_symbol = "+" if exit_trade['pl'] >= 0 else ""
+            body += f"   • {exit_trade['ticker']}: {exit_trade['return_pct']:.1f}% ({pl_symbol}${exit_trade['pl']:.2f})\n"
+            body += f"     Reason: {exit_trade['reason']}\n"
+        body += "\n"
+    
+    # Current open positions
+    if len(positions) > 0:
+        body += "📈 CURRENT OPEN POSITIONS:\n"
+        for _, row in positions.iterrows():
+            entry_price = safe_float(row["entry_price"])
+            shares = int(row["shares"])
+            # Calculate unrealized P&L using current price (approximate)
+            body += f"   • {row['ticker']}: {shares} shares @ ${entry_price:.2f}\n"
+            body += f"     Stop: ${safe_float(row['trailing_stop']):.2f}\n"
+        body += "\n"
+    else:
+        body += "📈 CURRENT OPEN POSITIONS: None (in cash)\n\n"
+    
+    # Recent trade summary
+    if len(trade_log) > 0:
+        recent = trade_log.tail(5)
+        total_pl = trade_log["gross_pl"].sum() if "gross_pl" in trade_log.columns else 0
+        winning_trades = len(trade_log[trade_log["gross_pl"] > 0]) if "gross_pl" in trade_log.columns else 0
+        win_rate = (winning_trades / len(trade_log) * 100) if len(trade_log) > 0 else 0
+        
+        body += f"""
+📊 PERFORMANCE SUMMARY:
+   • Total Trades: {len(trade_log)}
+   • Win Rate: {win_rate:.1f}%
+   • Total P&L: ${total_pl:.2f}
+   • Recent Trades: {len(recent)}
+
+"""
+    
+    # Dashboard link
+    body += f"""
+═══════════════════════════════════════════════════════════
+  📊 VIEW FULL DASHBOARD:
+  https://mrpink970.github.io/4-etf-trading-plan/dashboard.html
+═══════════════════════════════════════════════════════════
+
+Generated by GitHub Actions - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+    
+    # Send email
+    try:
+        msg = EmailMessage()
+        msg.set_content(body)
+        msg["Subject"] = f"ETF Trading Update - {asof_date} ({regime.upper()})"
+        msg["From"] = mail_username
+        msg["To"] = mail_to
+        
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+            smtp.login(mail_username, mail_password)
+            smtp.send_message(msg)
+        
+        print(f"Email sent successfully to {mail_to}")
+    except Exception as e:
+        print(f"Failed to send email: {e}")
+
+
 def main() -> None:
     print("=" * 50)
-    print("ETF PAPER TRADING DEBUG RUN")
+    print("ETF PAPER TRADING SYSTEM")
     print("=" * 50)
     
+    # Load state
     state = load_workbook_state(WORKBOOK_PATH)
-
     asof_date = state["date"]
     primary_etf = state["primary_etf"]
     secondary_etf = state["secondary_etf"]
     current_regime = state["regime"]
     prices = state["prices"]
-
-    print(f"\nASOF_DATE: {asof_date}")
-    print(f"PRIMARY ETF: {primary_etf}")
-    print(f"SECONDARY ETF: {secondary_etf}")
-    print(f"REGIME: {current_regime}")
-    print(f"PRICES: {prices}\n")
-
-    positions = load_positions()
-    trade_log = load_trade_log()
     
-    print(f"EXISTING POSITIONS: {len(positions)}")
-    if not positions.empty:
-        print(positions)
-    print(f"TRADE LOG COUNT: {len(trade_log)}\n")
-
-    positions = update_trailing_stops(positions, prices)
-
+    # Load existing data
+    old_positions = load_positions()
+    old_trade_log = load_trade_log()
+    
+    print(f"Date: {asof_date}")
+    print(f"Signal: {primary_etf} / {secondary_etf}")
+    print(f"Regime: {current_regime}")
+    print(f"Existing positions: {len(old_positions)}")
+    
+    # Track what changed for email
+    new_entries = []
+    new_exits = []
+    
+    # Update trailing stops
+    positions = update_trailing_stops(old_positions, prices)
+    
+    # Process exits
     exits = build_exit_list(
         positions=positions,
         current_regime=current_regime,
@@ -555,20 +622,55 @@ def main() -> None:
         prices=prices,
     )
     
-    print(f"\nEXITS TO PROCESS: {len(exits)}")
+    # Track exits before applying
     if exits:
-        print(exits)
-
+        for exit_item in exits:
+            ticker = exit_item["ticker"]
+            reason = exit_item["reason"]
+            pos_row = positions[positions["ticker"] == ticker]
+            if not pos_row.empty:
+                entry_price = safe_float(pos_row.iloc[0]["entry_price"])
+                shares = int(pos_row.iloc[0]["shares"])
+                exit_price = prices.get(ticker, {}).get("open")
+                if exit_price:
+                    pl = (exit_price - entry_price) * shares
+                    return_pct = ((exit_price / entry_price) - 1) * 100
+                    new_exits.append({
+                        "ticker": ticker,
+                        "pl": pl,
+                        "return_pct": return_pct,
+                        "reason": reason,
+                    })
+    
     positions, trade_log = apply_exits(
         positions=positions,
         exits=exits,
         asof_date=asof_date,
         prices=prices,
-        trade_log=trade_log,
+        trade_log=old_trade_log,
     )
     
-    print(f"\nPOSITIONS AFTER EXITS: {len(positions)}")
-
+    # Process entries
+    old_held = set(old_positions["ticker"].astype(str).str.upper().tolist()) if not old_positions.empty else set()
+    
+    if current_regime != "neutral":
+        desired = []
+        if primary_etf in ALL_ETFS and primary_etf != "WAIT":
+            desired.append(primary_etf)
+        if secondary_etf in ALL_ETFS and secondary_etf != "WAIT":
+            desired.append(secondary_etf)
+        
+        for ticker in desired:
+            if ticker not in old_held:
+                entry_price = prices.get(ticker, {}).get("open")
+                if entry_price:
+                    new_entries.append({
+                        "ticker": ticker,
+                        "price": entry_price,
+                        "shares": SHARES_PER_TRADE,
+                        "stop": entry_price * (1 - TRAILING_STOP_PCT),
+                    })
+    
     positions = apply_entries(
         positions=positions,
         current_regime=current_regime,
@@ -578,18 +680,44 @@ def main() -> None:
         prices=prices,
     )
     
-    print(f"\nPOSITIONS AFTER ENTRIES: {len(positions)}")
-
+    # Save data
     save_positions(positions)
     save_trade_log(trade_log)
     save_performance(trade_log)
-
-    print(f"\nETF paper trading updated for {asof_date}")
+    
+    # Send email notification
+    send_email_summary(
+        asof_date=asof_date,
+        primary_etf=primary_etf,
+        secondary_etf=secondary_etf,
+        regime=current_regime,
+        positions=positions,
+        trade_log=trade_log,
+        new_entries=new_entries,
+        new_exits=new_exits,
+    )
+    
+    # Print summary
+    print("\n" + "=" * 50)
+    print("SUMMARY")
+    print("=" * 50)
+    print(f"Date: {asof_date}")
     print(f"Primary ETF: {primary_etf}")
     print(f"Secondary ETF: {secondary_etf}")
     print(f"Regime: {current_regime}")
     print(f"Open positions: {len(positions)}")
     print(f"Closed trades logged: {len(trade_log)}")
+    
+    if new_entries:
+        print(f"\n🟢 New entries: {len(new_entries)}")
+        for e in new_entries:
+            print(f"  • {e['ticker']} @ ${e['price']:.2f}")
+    
+    if new_exits:
+        print(f"\n🔴 Positions closed: {len(new_exits)}")
+        for e in new_exits:
+            print(f"  • {e['ticker']}: {e['return_pct']:.1f}% (${e['pl']:.2f})")
+    
     print("=" * 50)
 
 
