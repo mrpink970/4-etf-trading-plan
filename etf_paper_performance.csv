@@ -1,2 +1,2 @@
 total_trades,win_rate,loss_rate,avg_gain_pct,avg_loss_pct,largest_gain_pct,largest_loss_pct,total_gross_pl,expectancy_pct
-0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+1,1.0,0.0,1e-06,0.0,1e-06,0.0,3.7e-05,1e-06
