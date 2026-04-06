@@ -1,3 +1,4 @@
 ticker,regime,entry_date,entry_price,exit_date,exit_price,shares,gross_pl,return_pct,exit_reason
 SOXL,bull,2026-04-03,46.060001,2026-04-03,46.060001,100,3.7e-05,1e-06,trailing_stop
 SOXL,bull,2026-04-03,46.060001,2026-04-03,46.060001,100,3.7e-05,1e-06,trailing_stop
+SOXL,bull,2026-04-03,46.060001,2026-04-03,46.060001,100,3.7e-05,1e-06,trailing_stop
