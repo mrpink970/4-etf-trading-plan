@@ -1,169 +1,269 @@
+#!/usr/bin/env python3
+"""
+ETF Daily Data Updater
+Fetches OHLC data for SOXL, TQQQ, SOXS, SQQQ, SMH, QQQ, and SOXX
+Updates the Excel workbook without losing existing data
+"""
+
 import sys
-from datetime import datetime
-
-import openpyxl
-import yfinance as yf
-from openpyxl.workbook.properties import CalcProperties
 import pandas as pd
+import yfinance as yf
+from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
+from datetime import datetime, timedelta
+import warnings
+warnings.filterwarnings('ignore')
 
-DEFAULT_FILE = "4_ETF_Trading_Workbook_Template.xlsx"
-FILE = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_FILE
-
-# Full-OHLC workbook layout
-COL_MAP = {
-    "SOXL": 2,   # B:E
-    "SOXS": 9,   # I:L
-    "TQQQ": 16,  # P:S
-    "SQQQ": 23,  # W:Z
+# Tickers to fetch
+TICKERS = {
+    'SOXL': 'SOXL',
+    'TQQQ': 'TQQQ',
+    'SOXS': 'SOXS',
+    'SQQQ': 'SQQQ',
+    'SMH': 'SMH',
+    'QQQ': 'QQQ',
+    'SOXX': 'SOXX',  # NEW: Added SOXX
 }
-QQQ_CLOSE_COL = 30   # AD
-SMH_CLOSE_COL = 34   # AH
+
+# Column suffixes for each ticker
+COLUMN_SUFFIXES = ['_Open', '_High', '_Low', '_Close', '_%Chg', '_3D', '_5D']
+
+# Required columns for Daily_Data sheet (will be auto-created if missing)
+REQUIRED_COLUMNS = []
+for ticker in TICKERS.keys():
+    for suffix in COLUMN_SUFFIXES:
+        REQUIRED_COLUMNS.append(f"{ticker}{suffix}")
 
 
-def get_data(ticker: str, period="10d"):
-    data = yf.download(
-        ticker,
-        period=period,
-        interval="1d",
-        progress=False,
-        auto_adjust=False,
-        group_by="column",
-        threads=False,
-    )
+def ensure_columns_exist(worksheet, required_columns):
+    """Automatically add missing columns to the worksheet without disturbing existing data"""
+    existing_columns = []
+    for col in range(1, worksheet.max_column + 1):
+        cell_value = worksheet.cell(row=1, column=col).value
+        if cell_value:
+            existing_columns.append(str(cell_value).strip())
+    
+    missing_columns = [col for col in required_columns if col not in existing_columns]
+    
+    if missing_columns:
+        print(f"Adding {len(missing_columns)} missing columns: {missing_columns[:5]}...")
+        
+        # Add missing columns to the right of existing data
+        next_col = worksheet.max_column + 1
+        for col_name in missing_columns:
+            worksheet.cell(row=1, column=next_col, value=col_name)
+            next_col += 1
+        
+        return True
+    return False
 
-    if data is None or data.empty:
+
+def fetch_historical_data(ticker, start_date, end_date):
+    """Fetch historical OHLC data from Yahoo Finance"""
+    try:
+        stock = yf.Ticker(ticker)
+        data = stock.history(start=start_date, end=end_date)
+        if data.empty:
+            print(f"Warning: No data for {ticker}")
+            return None
+        return data
+    except Exception as e:
+        print(f"Error fetching {ticker}: {e}")
         return None
 
-    if getattr(data.columns, "nlevels", 1) > 1:
-        data.columns = data.columns.get_level_values(0)
 
-    required = ["Open", "High", "Low", "Close"]
-    missing = [c for c in required if c not in data.columns]
-    if missing:
-        raise ValueError(f"Missing expected columns for {ticker}: {missing}")
+def calculate_returns(df, ticker):
+    """Calculate 1D, 3D, 5D returns from close prices"""
+    if df is None or df.empty:
+        return {}
+    
+    # Calculate returns
+    returns_1d = df['Close'].pct_change() * 100
+    returns_3d = df['Close'].pct_change(periods=3) * 100
+    returns_5d = df['Close'].pct_change(periods=5) * 100
+    
+    # Create return columns
+    result = {}
+    for date in df.index:
+        date_str = date.strftime('%Y-%m-%d')
+        result[date_str] = {
+            f"{ticker}_%Chg": round(returns_1d.get(date, 0), 4) if date in returns_1d.index else 0,
+            f"{ticker}_3D": round(returns_3d.get(date, 0), 4) if date in returns_3d.index else 0,
+            f"{ticker}_5D": round(returns_5d.get(date, 0), 4) if date in returns_5d.index else 0,
+        }
+    
+    return result
 
-    data = data.dropna(subset=required)
-    if data.empty:
-        return None
 
-    return data
-
-
-def find_target_row(ws):
-    row = 3
-    while ws.cell(row=row, column=1).value not in (None, ""):
-        row += 1
-    return row
-
-
-def calculate_signals(ws_daily):
-    """Read Daily_Data and determine which ETF to trade"""
-    # Load daily data into DataFrame
-    rows = list(ws_daily.iter_rows(values_only=True))
-    if not rows:
-        return "WAIT", "WAIT"
+def update_workbook(workbook_path):
+    """Main function to update the workbook with latest data"""
     
-    # Find header row
-    header_row = None
-    for i, row in enumerate(rows):
-        if row and row[0] == "Date":
-            header_row = i
-            break
+    print("=" * 60)
+    print("ETF DAILY DATA UPDATER")
+    print("=" * 60)
     
-    if header_row is None:
-        return "WAIT", "WAIT"
+    # Load workbook
+    try:
+        wb = load_workbook(workbook_path)
+        print(f"Loaded workbook: {workbook_path}")
+    except Exception as e:
+        print(f"Error loading workbook: {e}")
+        return False
     
-    headers = [str(cell) if cell else "" for cell in rows[header_row]]
-    
-    data = []
-    for row in rows[header_row + 1:]:
-        if row and row[0]:
-            data.append(row)
-    
-    if len(data) < 5:
-        return "WAIT", "WAIT"
-    
-    df = pd.DataFrame(data, columns=headers)
-    
-    # Convert to numeric where needed
-    for etf in ["SOXL", "SOXS", "TQQQ", "SQQQ"]:
-        close_col = f"{etf} Close"
-        if close_col in df.columns:
-            df[close_col] = pd.to_numeric(df[close_col], errors='coerce')
-    
-    # Get latest close prices
-    latest = df.iloc[-1]
-    
-    # Simple momentum strategy - example:
-    # If SOXL > 20-day SMA of SOXL, buy SOXL, else buy SOXS
-    if "SOXL Close" in df.columns:
-        soxl_prices = df["SOXL Close"].dropna()
-        if len(soxl_prices) >= 20:
-            soxl_sma20 = soxl_prices.tail(20).mean()
-            current_soxl = latest["SOXL Close"]
-            
-            if current_soxl > soxl_sma20:
-                primary = "SOXL"
-                secondary = "TQQQ"
-            else:
-                primary = "SOXS"
-                secondary = "SQQQ"
-        else:
-            primary = "SOXL"
-            secondary = "TQQQ"
+    # Ensure Daily_Data sheet exists
+    if 'Daily_Data' not in wb.sheetnames:
+        print("Creating Daily_Data sheet...")
+        ws = wb.create_sheet('Daily_Data')
+        # Add Date column
+        ws.cell(row=1, column=1, value='Date')
     else:
-        primary = "SOXL"
-        secondary = "TQQQ"
+        ws = wb['Daily_Data']
+        print("Daily_Data sheet found")
     
-    return primary, secondary
-
-
-def update_signals(ws_signal, ws_daily):
-    """Write calculated signals to the Signal sheet"""
-    primary, secondary = calculate_signals(ws_daily)
+    # Auto-add missing columns
+    if ensure_columns_exist(ws, REQUIRED_COLUMNS):
+        print("Added missing columns - existing data preserved")
     
-    ws_signal["D23"] = primary  # Primary ETF
-    ws_signal["D24"] = secondary  # Secondary ETF
-    ws_signal["D27"] = datetime.now().strftime("%m/%d/%y")  # Signal date
+    # Read existing data into DataFrame
+    data_rows = []
+    headers = []
     
-    print(f"Signals updated: Primary={primary}, Secondary={secondary}")
+    # Get headers from first row
+    for col in range(1, ws.max_column + 1):
+        header = ws.cell(row=1, column=col).value
+        if header:
+            headers.append(str(header).strip())
+    
+    # Read existing data rows
+    for row in range(2, ws.max_row + 1):
+        row_data = {}
+        has_data = False
+        for col_idx, header in enumerate(headers, start=1):
+            cell_value = ws.cell(row=row, column=col_idx).value
+            if cell_value is not None and str(cell_value).strip() != '':
+                has_data = True
+            row_data[header] = cell_value
+        if has_data:
+            data_rows.append(row_data)
+    
+    existing_df = pd.DataFrame(data_rows) if data_rows else pd.DataFrame()
+    
+    # Determine date range
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=365)  # Get 1 year of history
+    
+    print(f"\nFetching data from {start_date.date()} to {end_date.date()}")
+    
+    # Fetch data for all tickers
+    all_data = {}
+    all_returns = {}
+    
+    for ticker_symbol in TICKERS.keys():
+        print(f"Fetching {ticker_symbol}...")
+        df = fetch_historical_data(ticker_symbol, start_date, end_date)
+        if df is not None:
+            all_data[ticker_symbol] = df
+            all_returns[ticker_symbol] = calculate_returns(df, ticker_symbol)
+    
+    # Build complete dataset
+    all_dates = set()
+    for ticker, df in all_data.items():
+        all_dates.update(df.index.strftime('%Y-%m-%d'))
+    
+    all_dates = sorted(all_dates)
+    
+    # Create complete DataFrame
+    complete_data = {}
+    for date in all_dates:
+        complete_data[date] = {'Date': date}
+        
+        for ticker, df in all_data.items():
+            date_obj = datetime.strptime(date, '%Y-%m-%d')
+            if date_obj in df.index:
+                row = df.loc[date_obj]
+                complete_data[date][f"{ticker}_Open"] = round(row['Open'], 6)
+                complete_data[date][f"{ticker}_High"] = round(row['High'], 6)
+                complete_data[date][f"{ticker}_Low"] = round(row['Low'], 6)
+                complete_data[date][f"{ticker}_Close"] = round(row['Close'], 6)
+            else:
+                complete_data[date][f"{ticker}_Open"] = None
+                complete_data[date][f"{ticker}_High"] = None
+                complete_data[date][f"{ticker}_Low"] = None
+                complete_data[date][f"{ticker}_Close"] = None
+            
+            # Add return data
+            if ticker in all_returns and date in all_returns[ticker]:
+                complete_data[date].update(all_returns[ticker][date])
+    
+    # Convert to DataFrame
+    new_df = pd.DataFrame.from_dict(complete_data, orient='index')
+    new_df = new_df.sort_index()  # Sort by date
+    
+    # Merge with existing data (preserve existing values)
+    if not existing_df.empty and 'Date' in existing_df.columns:
+        # Convert existing DataFrame dates to string for merging
+        existing_df['Date'] = existing_df['Date'].astype(str)
+        new_df['Date'] = new_df['Date'].astype(str)
+        
+        # Merge: new data overwrites existing, but keep existing columns not in new data
+        merged_df = existing_df.set_index('Date').combine_first(new_df.set_index('Date')).reset_index()
+        merged_df.rename(columns={'index': 'Date'}, inplace=True)
+        final_df = merged_df.sort_values('Date')
+    else:
+        final_df = new_df
+    
+    # Write back to Excel
+    print("\nWriting data to Excel...")
+    
+    # Clear existing data (keep headers)
+    for row in range(2, ws.max_row + 1):
+        for col in range(1, ws.max_column + 1):
+            ws.cell(row=row, column=col, value=None)
+    
+    # Write headers
+    headers = ['Date'] + [col for col in final_df.columns if col != 'Date']
+    for col_idx, header in enumerate(headers, start=1):
+        ws.cell(row=1, column=col_idx, value=header)
+    
+    # Write data rows
+    for row_idx, (_, row) in enumerate(final_df.iterrows(), start=2):
+        for col_idx, header in enumerate(headers, start=1):
+            value = row[header] if header in row.index else None
+            if value is not None and not pd.isna(value):
+                ws.cell(row=row_idx, column=col_idx, value=value)
+    
+    # Auto-adjust column widths
+    for col in range(1, ws.max_column + 1):
+        max_length = 0
+        col_letter = get_column_letter(col)
+        for row in range(1, min(ws.max_row, 100) + 1):
+            cell_value = ws.cell(row=row, column=col).value
+            if cell_value:
+                max_length = max(max_length, len(str(cell_value)))
+        adjusted_width = min(max_length + 2, 20)
+        ws.column_dimensions[col_letter].width = adjusted_width
+    
+    # Save workbook
+    try:
+        wb.save(workbook_path)
+        print(f"\n✅ Successfully updated {workbook_path}")
+        print(f"   Total rows: {len(final_df)}")
+        print(f"   Date range: {final_df['Date'].min()} to {final_df['Date'].max()}")
+        print(f"   Columns: {len(headers)}")
+        return True
+    except Exception as e:
+        print(f"Error saving workbook: {e}")
+        return False
 
 
 def main():
-    wb = openpyxl.load_workbook(FILE)
-    ws_daily = wb["Daily_Data"]
-    ws_signal = wb["Signal"]
+    if len(sys.argv) > 1:
+        workbook_path = sys.argv[1]
+    else:
+        workbook_path = "4_ETF_Trading_Workbook_Template.xlsx"
     
-    row = find_target_row(ws_daily)
-    ws_daily.cell(row=row, column=1).value = datetime.now().strftime("%m/%d/%y")
-    
-    # Get OHLC data for each ETF
-    for ticker, col in COL_MAP.items():
-        data = get_data(ticker)
-        if data is not None and not data.empty:
-            latest = data.iloc[-1]
-            ws_daily.cell(row=row, column=col).value = latest["Open"]
-            ws_daily.cell(row=row, column=col + 1).value = latest["High"]
-            ws_daily.cell(row=row, column=col + 2).value = latest["Low"]
-            ws_daily.cell(row=row, column=col + 3).value = latest["Close"]
-    
-    # Get QQQ and SMH data
-    qqq = get_data("QQQ")
-    smh = get_data("SMH")
-    
-    if qqq is not None and not qqq.empty:
-        ws_daily.cell(row=row, column=QQQ_CLOSE_COL).value = qqq.iloc[-1]["Close"]
-    if smh is not None and not smh.empty:
-        ws_daily.cell(row=row, column=SMH_CLOSE_COL).value = smh.iloc[-1]["Close"]
-    
-    # Update signals based on latest data
-    update_signals(ws_signal, ws_daily)
-    
-    # Force Excel recalculation
-    wb.calculation = CalcProperties(calcMode="auto", fullCalcOnLoad=True, forceFullCalc=True)
-    
-    wb.save(FILE)
-    print(f"Updated successfully: row {row}")
+    success = update_workbook(workbook_path)
+    sys.exit(0 if success else 1)
 
 
 if __name__ == "__main__":
