@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, List, Tuple
 import os
 import smtplib
 from email.message import EmailMessage
@@ -16,16 +16,27 @@ WORKBOOK_PATH = Path("4_ETF_Trading_Workbook_Template.xlsx")
 POSITIONS_PATH = Path("etf_paper_positions.csv")
 TRADE_LOG_PATH = Path("etf_paper_trade_log.csv")
 PERFORMANCE_PATH = Path("etf_paper_performance.csv")
+ACCOUNT_BALANCE_PATH = Path("account_balance.csv")
 
-SHARES_PER_TRADE = 100
-MAX_TRADES = 2
+# Trading parameters
+MAX_TRADES = 1  # Only hold ONE position at a time
 TRAILING_STOP_PCT = 0.12
+POSITION_SIZE_PCT = 0.95  # Use 95% of account balance per trade (single position)
+STARTING_BALANCE = 5000.0
+
+# Ranking weights
+RANKING_WEIGHTS = {
+    '1d_return': 0.30,
+    '3d_return': 0.25,
+    '5d_return': 0.20,
+    'trend_strength': 0.15,
+    'volatility_score': 0.10,
+}
 
 BULL_ETFS = {"SOXL", "TQQQ"}
 BEAR_ETFS = {"SOXS", "SQQQ"}
 ALL_ETFS = BULL_ETFS | BEAR_ETFS
 
-# Track last processed date to prevent duplicate runs
 LAST_RUN_PATH = Path("last_processed_date.txt")
 
 
@@ -53,7 +64,6 @@ def determine_regime(primary_etf: str) -> str:
 
 
 def get_last_processed_date() -> Optional[str]:
-    """Read the last date that was successfully processed"""
     if LAST_RUN_PATH.exists():
         try:
             with open(LAST_RUN_PATH, 'r') as f:
@@ -64,7 +74,6 @@ def get_last_processed_date() -> Optional[str]:
 
 
 def save_last_processed_date(date: str) -> None:
-    """Save the date that was successfully processed"""
     try:
         with open(LAST_RUN_PATH, 'w') as f:
             f.write(date)
@@ -72,12 +81,63 @@ def save_last_processed_date(date: str) -> None:
         pass
 
 
+def load_account_balance() -> float:
+    """Load current account balance from CSV, or create with starting balance"""
+    if ACCOUNT_BALANCE_PATH.exists():
+        try:
+            df = pd.read_csv(ACCOUNT_BALANCE_PATH)
+            if not df.empty and 'balance' in df.columns:
+                return float(df.iloc[-1]['balance'])
+        except Exception:
+            pass
+    
+    df = pd.DataFrame([{
+        'date': datetime.now().strftime('%Y-%m-%d'),
+        'balance': STARTING_BALANCE,
+        'cash': STARTING_BALANCE,
+        'equity': STARTING_BALANCE
+    }])
+    df.to_csv(ACCOUNT_BALANCE_PATH, index=False)
+    return STARTING_BALANCE
+
+
+def update_account_balance(date: str, cash_balance: float, equity: float = None) -> None:
+    """Update account balance CSV with new balance"""
+    if equity is None:
+        equity = cash_balance
+    
+    new_row = pd.DataFrame([{
+        'date': date,
+        'balance': round(cash_balance, 2),
+        'cash': round(cash_balance, 2),
+        'equity': round(equity, 2)
+    }])
+    
+    if ACCOUNT_BALANCE_PATH.exists():
+        existing = pd.read_csv(ACCOUNT_BALANCE_PATH)
+        updated = pd.concat([existing, new_row], ignore_index=True)
+    else:
+        updated = new_row
+    
+    updated.to_csv(ACCOUNT_BALANCE_PATH, index=False)
+
+
+def calculate_position_shares(account_balance: float, entry_price: float) -> int:
+    """Calculate number of shares based on account balance"""
+    if entry_price <= 0:
+        return 0
+    
+    position_value = account_balance * POSITION_SIZE_PCT
+    shares = int(position_value / entry_price)
+    
+    return max(1, min(shares, 1000))
+
+
 def read_daily_data_wide(daily_ws) -> pd.DataFrame:
     rows = list(daily_ws.iter_rows(values_only=True))
     if not rows:
         raise ValueError("Daily_Data sheet is empty.")
 
-    # Find the row that contains the actual headers by looking for "Date"
     header_idx = None
     for i, row in enumerate(rows):
         values = [str(cell).strip() if cell is not None else "" for cell in row]
@@ -109,50 +169,40 @@ def read_daily_data_wide(daily_ws) -> pd.DataFrame:
     if "Date" not in df.columns:
         raise ValueError("Daily_Data missing Date column.")
 
-    # Convert to datetime and handle duplicates
     df["Date"] = pd.to_datetime(df["Date"], errors='coerce')
     df = df[df["Date"].notna()].copy()
-    
-    # CRITICAL FIX: Remove duplicate dates, keep the last occurrence (most complete data)
     df = df.sort_values("Date").drop_duplicates(subset=["Date"], keep="last")
-    
     df["Date"] = df["Date"].dt.date
 
     return df
 
 
-def extract_latest_prices(df: pd.DataFrame) -> tuple[str, Dict[str, Dict[str, Optional[float]]]]:
+def extract_latest_prices_and_returns(df: pd.DataFrame) -> Tuple[str, Dict[str, Dict[str, Optional[float]]], Dict[str, Dict[str, Optional[float]]]]:
+    """Extract latest prices and also get returns for ranking"""
     latest_row = df.sort_values("Date").iloc[-1]
     latest_date = str(latest_row["Date"])
-
+    
+    # Get previous rows for return calculations
+    prev_row = None
+    if len(df) >= 2:
+        prev_row = df.sort_values("Date").iloc[-2]
+    
     prices: Dict[str, Dict[str, Optional[float]]] = {}
+    returns: Dict[str, Dict[str, Optional[float]]] = {}
+    
     for etf in sorted(ALL_ETFS):
-        # Try both underscore and space formats
-        open_col_underscore = f"{etf}_Open"
-        high_col_underscore = f"{etf}_High"
-        low_col_underscore = f"{etf}_Low"
-        close_col_underscore = f"{etf}_Close"
+        open_col = f"{etf}_Open"
+        high_col = f"{etf}_High"
+        low_col = f"{etf}_Low"
+        close_col = f"{etf}_Close"
+        chg_col = f"{etf}_%Chg"
+        three_d_col = f"{etf}_3D"
+        five_d_col = f"{etf}_5D"
         
-        open_col_space = f"{etf} Open"
-        high_col_space = f"{etf} High"
-        low_col_space = f"{etf} Low"
-        close_col_space = f"{etf} Close"
-        
-        open_val = latest_row.get(open_col_underscore)
-        if open_val is None:
-            open_val = latest_row.get(open_col_space)
-            
-        high_val = latest_row.get(high_col_underscore)
-        if high_val is None:
-            high_val = latest_row.get(high_col_space)
-            
-        low_val = latest_row.get(low_col_underscore)
-        if low_val is None:
-            low_val = latest_row.get(low_col_space)
-            
-        close_val = latest_row.get(close_col_underscore)
-        if close_val is None:
-            close_val = latest_row.get(close_col_space)
+        open_val = latest_row.get(open_col)
+        high_val = latest_row.get(high_col)
+        low_val = latest_row.get(low_col)
+        close_val = latest_row.get(close_col)
         
         prices[etf] = {
             "open": safe_float(open_val),
@@ -160,8 +210,65 @@ def extract_latest_prices(df: pd.DataFrame) -> tuple[str, Dict[str, Dict[str, Op
             "low": safe_float(low_val),
             "close": safe_float(close_val),
         }
+        
+        # Get returns from the sheet if available
+        returns[etf] = {
+            "1d": safe_float(latest_row.get(chg_col)),
+            "3d": safe_float(latest_row.get(three_d_col)),
+            "5d": safe_float(latest_row.get(five_d_col)),
+        }
+        
+        # If returns not in sheet, calculate from price data
+        if returns[etf]["1d"] is None and prev_row is not None:
+            prev_close = safe_float(prev_row.get(close_col))
+            if prev_close and prev_close > 0 and close_val:
+                returns[etf]["1d"] = ((close_val - prev_close) / prev_close) * 100
 
-    return latest_date, prices
+    return latest_date, prices, returns
+
+
+def rank_etfs(returns: Dict[str, Dict[str, Optional[float]]], regime: str) -> List[Tuple[str, float]]:
+    """Rank ETFs based on momentum scores, filtered by regime"""
+    scores = {}
+    
+    # Determine which ETFs are eligible based on regime
+    if regime == "bull":
+        eligible_etfs = BULL_ETFS
+    elif regime == "bear":
+        eligible_etfs = BEAR_ETFS
+    else:
+        return []  # Neutral regime, no trades
+    
+    for etf in eligible_etfs:
+        score = 0.0
+        
+        # Get returns (default to 0 if missing)
+        ret_1d = returns.get(etf, {}).get("1d", 0) or 0
+        ret_3d = returns.get(etf, {}).get("3d", 0) or 0
+        ret_5d = returns.get(etf, {}).get("5d", 0) or 0
+        
+        # Calculate weighted score (higher returns = better)
+        score += ret_1d * RANKING_WEIGHTS['1d_return']
+        score += ret_3d * RANKING_WEIGHTS['3d_return']
+        score += ret_5d * RANKING_WEIGHTS['5d_return']
+        
+        # Trend strength: consistent positive returns across periods
+        if ret_1d > 0 and ret_3d > 0 and ret_5d > 0:
+            score += 5 * RANKING_WEIGHTS['trend_strength']
+        elif ret_1d < 0 and ret_3d < 0 and ret_5d < 0:
+            score -= 5 * RANKING_WEIGHTS['trend_strength']
+        
+        # Volatility adjustment (lower volatility = slightly better)
+        volatility = abs(ret_1d - ret_3d) if ret_1d and ret_3d else 0
+        volatility_score = max(0, 10 - volatility) * RANKING_WEIGHTS['volatility_score']
+        score += volatility_score
+        
+        scores[etf] = round(score, 4)
+    
+    # Sort by score descending
+    sorted_etfs = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    
+    return sorted_etfs
 
 
 def load_workbook_state(path: Path) -> Dict[str, object]:
@@ -183,7 +290,7 @@ def load_workbook_state(path: Path) -> Dict[str, object]:
     signal_date_raw = signal_ws["D27"].value
 
     daily_df = read_daily_data_wide(daily_ws)
-    daily_date, prices = extract_latest_prices(daily_df)
+    daily_date, prices, returns = extract_latest_prices_and_returns(daily_df)
 
     if signal_date_raw is not None:
         try:
@@ -199,6 +306,7 @@ def load_workbook_state(path: Path) -> Dict[str, object]:
         "secondary_etf": secondary_etf,
         "regime": determine_regime(primary_etf),
         "prices": prices,
+        "returns": returns,
     }
 
 
@@ -211,11 +319,16 @@ def load_positions() -> pd.DataFrame:
         "shares",
         "highest_price",
         "trailing_stop",
+        "rank_score_at_entry",
     ]
     if POSITIONS_PATH.exists():
         df = pd.read_csv(POSITIONS_PATH)
         if df.empty:
             return pd.DataFrame(columns=cols)
+        # Add missing columns if needed
+        for col in cols:
+            if col not in df.columns:
+                df[col] = None
         return df
     return pd.DataFrame(columns=cols)
 
@@ -250,10 +363,15 @@ def save_positions(df: pd.DataFrame) -> None:
         "shares",
         "highest_price",
         "trailing_stop",
+        "rank_score_at_entry",
     ]
     if df.empty:
         pd.DataFrame(columns=cols).to_csv(POSITIONS_PATH, index=False)
     else:
+        # Ensure all columns exist
+        for col in cols:
+            if col not in df.columns:
+                df[col] = None
         df[cols].to_csv(POSITIONS_PATH, index=False)
 
 
@@ -323,12 +441,12 @@ def save_performance(trade_log: pd.DataFrame) -> None:
             "total_trades": total_trades,
             "win_rate": round(win_rate, 6),
             "loss_rate": round(loss_rate, 6),
-            "avg_gain_pct": round(float(avg_gain_pct), 6),
-            "avg_loss_pct": round(float(avg_loss_pct), 6),
-            "largest_gain_pct": round(float(largest_gain_pct), 6),
-            "largest_loss_pct": round(float(largest_loss_pct), 6),
-            "total_gross_pl": round(float(total_gross_pl), 6),
-            "expectancy_pct": round(float(expectancy_pct), 6),
+            "avg_gain_pct": round(float(avg_gain_pct), 4),
+            "avg_loss_pct": round(float(avg_loss_pct), 4),
+            "largest_gain_pct": round(float(largest_gain_pct), 4),
+            "largest_loss_pct": round(float(largest_loss_pct), 4),
+            "total_gross_pl": round(float(total_gross_pl), 2),
+            "expectancy_pct": round(float(expectancy_pct), 4),
         }]
     )[cols].to_csv(PERFORMANCE_PATH, index=False)
 
@@ -364,40 +482,41 @@ def update_trailing_stops(
 def build_exit_list(
     positions: pd.DataFrame,
     current_regime: str,
-    primary_etf: str,
-    secondary_etf: str,
+    ranked_etfs: List[Tuple[str, float]],
     prices: Dict[str, Dict[str, Optional[float]]],
 ) -> list[dict[str, str]]:
+    """Build exit list including rotation to higher-ranked ETFs"""
     exits: list[dict[str, str]] = []
 
-    valid_targets = set()
-    if primary_etf in ALL_ETFS and primary_etf != "WAIT":
-        valid_targets.add(primary_etf)
-    if secondary_etf in ALL_ETFS and secondary_etf != "WAIT":
-        valid_targets.add(secondary_etf)
+    if positions.empty:
+        return exits
 
     for _, row in positions.iterrows():
         ticker = normalize_text(row["ticker"])
         held_regime = normalize_text(row["regime"]).lower()
+        entry_score = safe_float(row.get("rank_score_at_entry", 0)) or 0
 
+        # Exit on regime flip
         if current_regime != "neutral" and held_regime != current_regime:
             exits.append({"ticker": ticker, "reason": "regime_flip"})
             continue
 
-        if ticker not in valid_targets:
-            exits.append({"ticker": ticker, "reason": "signal_negative"})
-            continue
-
+        # Check trailing stop
         low_price = prices.get(ticker, {}).get("low")
         trailing_stop = safe_float(row["trailing_stop"])
         if low_price is not None and trailing_stop is not None and low_price <= trailing_stop:
             exits.append({"ticker": ticker, "reason": "trailing_stop"})
             continue
 
-    dedup = {}
-    for item in exits:
-        dedup.setdefault(item["ticker"], item["reason"])
-    return [{"ticker": k, "reason": v} for k, v in dedup.items()]
+        # Rotation logic: exit if a better ETF is available
+        if ranked_etfs and len(ranked_etfs) > 0:
+            best_etf, best_score = ranked_etfs[0]
+            
+            # If current position is not the top-ranked ETF and the top ETF has a significantly higher score
+            if best_etf != ticker and best_score > entry_score + 2.0:  # 2 point threshold to avoid churn
+                exits.append({"ticker": ticker, "reason": f"rotation_to_{best_etf}"})
+
+    return exits
 
 
 def apply_exits(
@@ -406,13 +525,15 @@ def apply_exits(
     asof_date: str,
     prices: Dict[str, Dict[str, Optional[float]]],
     trade_log: pd.DataFrame,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+    current_balance: float,
+) -> tuple[pd.DataFrame, pd.DataFrame, float]:
     if positions.empty or not exits:
-        return positions, trade_log
+        return positions, trade_log, current_balance
 
     exit_map = {x["ticker"]: x["reason"] for x in exits}
     keep_rows = []
     new_trades = []
+    updated_balance = current_balance
 
     for _, row in positions.iterrows():
         ticker = normalize_text(row["ticker"])
@@ -420,8 +541,6 @@ def apply_exits(
             keep_rows.append(row.to_dict())
             continue
 
-        # CRITICAL FIX: Use close price instead of open for exit
-        # This ensures we capture actual profit/loss
         exit_price = prices.get(ticker, {}).get("close")
         if exit_price is None:
             exit_price = prices.get(ticker, {}).get("open")
@@ -435,6 +554,8 @@ def apply_exits(
         gross_pl = (exit_price - entry_price) * shares
         return_pct = ((exit_price / entry_price) - 1) * 100 if entry_price else 0.0
 
+        updated_balance += gross_pl
+
         new_trades.append({
             "ticker": ticker,
             "regime": row["regime"],
@@ -443,8 +564,8 @@ def apply_exits(
             "exit_date": asof_date,
             "exit_price": round(exit_price, 6),
             "shares": shares,
-            "gross_pl": round(gross_pl, 6),
-            "return_pct": round(return_pct, 6),
+            "gross_pl": round(gross_pl, 2),
+            "return_pct": round(return_pct, 4),
             "exit_reason": exit_map[ticker],
         })
 
@@ -452,12 +573,12 @@ def apply_exits(
     if remaining.empty:
         remaining = pd.DataFrame(columns=[
             "ticker", "regime", "entry_date", "entry_price",
-            "shares", "highest_price", "trailing_stop"
+            "shares", "highest_price", "trailing_stop", "rank_score_at_entry"
         ])
 
     updated_log = pd.concat([trade_log, pd.DataFrame(new_trades)], ignore_index=True)
 
-    return remaining, updated_log
+    return remaining, updated_log, updated_balance
 
 
 def build_position_row(
@@ -465,6 +586,8 @@ def build_position_row(
     regime: str,
     asof_date: str,
     prices: Dict[str, Dict[str, Optional[float]]],
+    account_balance: float,
+    rank_score: float,
 ) -> Optional[dict[str, object]]:
     entry_price = prices.get(ticker, {}).get("open")
     high_price = prices.get(ticker, {}).get("high")
@@ -474,6 +597,11 @@ def build_position_row(
     if high_price is None:
         high_price = entry_price
 
+    shares = calculate_position_shares(account_balance, entry_price)
+    
+    if shares == 0:
+        return None
+
     trailing_stop = high_price * (1 - TRAILING_STOP_PCT)
 
     return {
@@ -481,54 +609,51 @@ def build_position_row(
         "regime": regime,
         "entry_date": asof_date,
         "entry_price": round(entry_price, 6),
-        "shares": SHARES_PER_TRADE,
+        "shares": shares,
         "highest_price": round(high_price, 6),
         "trailing_stop": round(trailing_stop, 6),
+        "rank_score_at_entry": round(rank_score, 4),
     }
 
 
 def apply_entries(
     positions: pd.DataFrame,
     current_regime: str,
-    primary_etf: str,
-    secondary_etf: str,
+    ranked_etfs: List[Tuple[str, float]],
     asof_date: str,
     prices: Dict[str, Dict[str, Optional[float]]],
+    account_balance: float,
 ) -> pd.DataFrame:
     if current_regime == "neutral":
+        return positions
+
+    # If we already have a position, don't enter another (MAX_TRADES = 1)
+    if len(positions) >= MAX_TRADES:
         return positions
 
     current = positions.copy()
     held = set(current["ticker"].astype(str).str.upper().tolist()) if not current.empty else set()
 
-    desired = []
-    if primary_etf in ALL_ETFS and primary_etf != "WAIT":
-        desired.append(primary_etf)
-    if secondary_etf in ALL_ETFS and secondary_etf != "WAIT":
-        desired.append(secondary_etf)
-
-    for ticker in desired:
-        if len(current) >= MAX_TRADES:
-            break
+    # Enter the top-ranked ETF if not already held
+    for ticker, score in ranked_etfs:
         if ticker in held:
             continue
-
-        row = build_position_row(ticker, current_regime, asof_date, prices)
+        
+        row = build_position_row(ticker, current_regime, asof_date, prices, account_balance, score)
         if row is None:
             continue
 
         current = pd.concat([current, pd.DataFrame([row])], ignore_index=True)
-        held.add(ticker)
+        break  # Only enter one position
 
     return current
 
 
 def send_email_summary(asof_date: str, primary_etf: str, secondary_etf: str, 
                        regime: str, positions: pd.DataFrame, trade_log: pd.DataFrame,
+                       account_balance: float, ranked_etfs: List[Tuple[str, float]],
                        new_entries: list = None, new_exits: list = None) -> None:
-    """Send email summary with trading activity"""
     
-    # Check if email credentials are available
     mail_username = os.environ.get("MAIL_USERNAME")
     mail_password = os.environ.get("MAIL_PASSWORD")
     mail_to = os.environ.get("MAIL_TO")
@@ -537,7 +662,11 @@ def send_email_summary(asof_date: str, primary_etf: str, secondary_etf: str,
         print("Email credentials not found. Skipping email notification.")
         return
     
-    # Build email body
+    # Build ranking display
+    ranking_text = "\n📊 ETF RANKINGS:\n"
+    for i, (etf, score) in enumerate(ranked_etfs[:4], 1):
+        ranking_text += f"   {i}. {etf}: {score:.2f}\n"
+    
     body = f"""
 ═══════════════════════════════════════════════════════════
   ETF PAPER TRADING UPDATE - {asof_date}
@@ -545,39 +674,34 @@ def send_email_summary(asof_date: str, primary_etf: str, secondary_etf: str,
 
 📊 MARKET REGIME: {regime.upper()}
 🎯 SIGNAL: {primary_etf} / {secondary_etf}
-
+💰 ACCOUNT BALANCE: ${account_balance:,.2f}
+{ranking_text}
 """
     
-    # New entries
     if new_entries and len(new_entries) > 0:
-        body += "🟢 NEW ENTRIES:\n"
+        body += "\n🟢 NEW ENTRY:\n"
         for entry in new_entries:
             body += f"   • {entry['ticker']}: {entry['shares']} shares @ ${entry['price']:.2f}\n"
             body += f"     Stop: ${entry['stop']:.2f}\n"
-        body += "\n"
     
-    # New exits (closed trades today)
     if new_exits and len(new_exits) > 0:
-        body += "🔴 POSITIONS CLOSED:\n"
+        body += "\n🔴 POSITION CLOSED:\n"
         for exit_trade in new_exits:
             pl_symbol = "+" if exit_trade['pl'] >= 0 else ""
             body += f"   • {exit_trade['ticker']}: {exit_trade['return_pct']:.1f}% ({pl_symbol}${exit_trade['pl']:.2f})\n"
             body += f"     Reason: {exit_trade['reason']}\n"
-        body += "\n"
     
-    # Current open positions
     if len(positions) > 0:
-        body += "📈 CURRENT OPEN POSITIONS:\n"
+        body += "\n📈 CURRENT OPEN POSITION:\n"
         for _, row in positions.iterrows():
             entry_price = safe_float(row["entry_price"])
             shares = int(row["shares"])
+            score = safe_float(row.get("rank_score_at_entry", 0)) or 0
             body += f"   • {row['ticker']}: {shares} shares @ ${entry_price:.2f}\n"
-            body += f"     Stop: ${safe_float(row['trailing_stop']):.2f}\n"
-        body += "\n"
+            body += f"     Entry Score: {score:.2f} | Stop: ${safe_float(row['trailing_stop']):.2f}\n"
     else:
-        body += "📈 CURRENT OPEN POSITIONS: None (in cash)\n\n"
+        body += "\n📈 CURRENT OPEN POSITION: None (in cash)\n"
     
-    # Recent trade summary
     if len(trade_log) > 0:
         recent = trade_log.tail(5)
         total_pl = trade_log["gross_pl"].sum() if "gross_pl" in trade_log.columns else 0
@@ -588,12 +712,9 @@ def send_email_summary(asof_date: str, primary_etf: str, secondary_etf: str,
 📊 PERFORMANCE SUMMARY:
    • Total Trades: {len(trade_log)}
    • Win Rate: {win_rate:.1f}%
-   • Total P&L: ${total_pl:.2f}
-   • Recent Trades: {len(recent)}
-
+   • Total Realized P&L: ${total_pl:.2f}
 """
     
-    # Dashboard link
     body += f"""
 ═══════════════════════════════════════════════════════════
   📊 VIEW FULL DASHBOARD:
@@ -603,7 +724,6 @@ def send_email_summary(asof_date: str, primary_etf: str, secondary_etf: str,
 Generated by GitHub Actions - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 """
     
-    # Send email
     try:
         msg = EmailMessage()
         msg.set_content(body)
@@ -622,10 +742,9 @@ Generated by GitHub Actions - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 def main() -> None:
     print("=" * 50)
-    print("ETF PAPER TRADING SYSTEM")
+    print("ETF PAPER TRADING SYSTEM (Single Position + Ranking)")
     print("=" * 50)
     
-    # Load state
     try:
         state = load_workbook_state(WORKBOOK_PATH)
     except Exception as e:
@@ -637,38 +756,46 @@ def main() -> None:
     secondary_etf = state["secondary_etf"]
     current_regime = state["regime"]
     prices = state["prices"]
+    returns = state["returns"]
     
-    # CRITICAL FIX: Check if we've already processed this date
+    # Check for duplicate processing
     last_processed = get_last_processed_date()
     if last_processed == asof_date:
-        print(f"Date {asof_date} already processed. Skipping to prevent duplicate runs.")
-        print("This prevents same-day entry/exit issues.")
+        print(f"Date {asof_date} already processed. Skipping.")
         return
     else:
-        print(f"Processing new date: {asof_date} (last processed: {last_processed})")
+        print(f"Processing new date: {asof_date}")
+    
+    # Rank ETFs for this regime
+    ranked_etfs = rank_etfs(returns, current_regime)
+    print(f"\n📊 ETF Rankings for {current_regime.upper()} regime:")
+    for i, (etf, score) in enumerate(ranked_etfs[:4], 1):
+        print(f"   {i}. {etf}: {score:.2f}")
+    
+    # Load account balance
+    account_balance = load_account_balance()
+    print(f"\n💰 Current account balance: ${account_balance:,.2f}")
     
     # Load existing data
     old_positions = load_positions()
     old_trade_log = load_trade_log()
     
-    print(f"Date: {asof_date}")
-    print(f"Signal: {primary_etf} / {secondary_etf}")
-    print(f"Regime: {current_regime}")
-    print(f"Existing positions: {len(old_positions)}")
+    print(f"\n📅 Date: {asof_date}")
+    print(f"🎯 Signal: {primary_etf} / {secondary_etf}")
+    print(f"📈 Regime: {current_regime}")
+    print(f"📌 Existing positions: {len(old_positions)}")
     
-    # Track what changed for email
     new_entries = []
     new_exits = []
     
     # Update trailing stops
     positions = update_trailing_stops(old_positions, prices)
     
-    # Process exits
+    # Build exit list (including rotation)
     exits = build_exit_list(
         positions=positions,
         current_regime=current_regime,
-        primary_etf=primary_etf,
-        secondary_etf=secondary_etf,
+        ranked_etfs=ranked_etfs,
         prices=prices,
     )
     
@@ -681,7 +808,6 @@ def main() -> None:
             if not pos_row.empty:
                 entry_price = safe_float(pos_row.iloc[0]["entry_price"])
                 shares = int(pos_row.iloc[0]["shares"])
-                # Use close price for exit calculation
                 exit_price = prices.get(ticker, {}).get("close")
                 if exit_price is None:
                     exit_price = prices.get(ticker, {}).get("open")
@@ -695,42 +821,36 @@ def main() -> None:
                         "reason": reason,
                     })
     
-    positions, trade_log = apply_exits(
+    # Apply exits and update balance
+    positions, trade_log, updated_balance = apply_exits(
         positions=positions,
         exits=exits,
         asof_date=asof_date,
         prices=prices,
         trade_log=old_trade_log,
+        current_balance=account_balance,
     )
     
-    # Process entries
-    old_held = set(old_positions["ticker"].astype(str).str.upper().tolist()) if not old_positions.empty else set()
-    
-    if current_regime != "neutral":
-        desired = []
-        if primary_etf in ALL_ETFS and primary_etf != "WAIT":
-            desired.append(primary_etf)
-        if secondary_etf in ALL_ETFS and secondary_etf != "WAIT":
-            desired.append(secondary_etf)
-        
-        for ticker in desired:
-            if ticker not in old_held:
-                entry_price = prices.get(ticker, {}).get("open")
-                if entry_price:
-                    new_entries.append({
-                        "ticker": ticker,
-                        "price": entry_price,
-                        "shares": SHARES_PER_TRADE,
-                        "stop": entry_price * (1 - TRAILING_STOP_PCT),
-                    })
+    # Process entries (only if we have no position)
+    if len(positions) == 0 and ranked_etfs:
+        top_etf, top_score = ranked_etfs[0]
+        entry_price = prices.get(top_etf, {}).get("open")
+        if entry_price:
+            shares = calculate_position_shares(updated_balance, entry_price)
+            new_entries.append({
+                "ticker": top_etf,
+                "price": entry_price,
+                "shares": shares,
+                "stop": entry_price * (1 - TRAILING_STOP_PCT),
+            })
     
     positions = apply_entries(
         positions=positions,
         current_regime=current_regime,
-        primary_etf=primary_etf,
-        secondary_etf=secondary_etf,
+        ranked_etfs=ranked_etfs,
         asof_date=asof_date,
         prices=prices,
+        account_balance=updated_balance,
     )
     
     # Save data
@@ -738,10 +858,14 @@ def main() -> None:
     save_trade_log(trade_log)
     save_performance(trade_log)
     
-    # Save the processed date to prevent re-processing
+    # Update account balance if changed
+    if updated_balance != account_balance:
+        update_account_balance(asof_date, updated_balance)
+    
+    # Save processed date
     save_last_processed_date(asof_date)
     
-    # Send email notification
+    # Send email
     send_email_summary(
         asof_date=asof_date,
         primary_etf=primary_etf,
@@ -749,6 +873,8 @@ def main() -> None:
         regime=current_regime,
         positions=positions,
         trade_log=trade_log,
+        account_balance=updated_balance,
+        ranked_etfs=ranked_etfs,
         new_entries=new_entries,
         new_exits=new_exits,
     )
@@ -758,21 +884,21 @@ def main() -> None:
     print("SUMMARY")
     print("=" * 50)
     print(f"Date: {asof_date}")
-    print(f"Primary ETF: {primary_etf}")
-    print(f"Secondary ETF: {secondary_etf}")
+    print(f"Account Balance: ${updated_balance:,.2f}")
     print(f"Regime: {current_regime}")
     print(f"Open positions: {len(positions)}")
+    if len(positions) > 0:
+        pos = positions.iloc[0]
+        print(f"  • {pos['ticker']}: {int(pos['shares'])} shares @ ${pos['entry_price']:.2f}")
+        print(f"    Stop: ${pos['trailing_stop']:.2f}")
     print(f"Closed trades logged: {len(trade_log)}")
     
     if new_entries:
-        print(f"\n🟢 New entries: {len(new_entries)}")
-        for e in new_entries:
-            print(f"  • {e['ticker']} @ ${e['price']:.2f}")
+        print(f"\n🟢 New entry: {new_entries[0]['ticker']} ({new_entries[0]['shares']} shares @ ${new_entries[0]['price']:.2f})")
     
     if new_exits:
-        print(f"\n🔴 Positions closed: {len(new_exits)}")
-        for e in new_exits:
-            print(f"  • {e['ticker']}: {e['return_pct']:.1f}% (${e['pl']:.2f})")
+        print(f"\n🔴 Position closed: {new_exits[0]['ticker']} - {new_exits[0]['return_pct']:.1f}% (${new_exits[0]['pl']:.2f})")
+        print(f"    Reason: {new_exits[0]['reason']}")
     
     print("=" * 50)
 
