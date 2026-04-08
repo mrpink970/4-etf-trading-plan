@@ -3,7 +3,7 @@ name: ETF Paper Trading
 on:
   workflow_dispatch:
   schedule:
-    - cron: '15 22 * * 1-5'
+    - cron: '30 0 * * 1-5'   # 00:30 UTC weekdays (after data updates)
 
 permissions:
   contents: write
@@ -37,6 +37,6 @@ jobs:
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "actions@github.com"
-          git add etf_paper_positions.csv etf_paper_trade_log.csv etf_paper_performance.csv
+          git add etf_paper_positions.csv etf_paper_trade_log.csv etf_paper_performance.csv account_balance.csv
           git diff --cached --quiet && echo "No changes" || git commit -m "ETF paper trading update"
           git push
