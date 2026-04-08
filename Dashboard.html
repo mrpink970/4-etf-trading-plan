@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ETF Paper Trading Dashboard | 3x Leveraged System</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>ETF Paper Trading Dashboard | Live CSV Data</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <style>
         * {
@@ -56,6 +56,10 @@
 
         .regime-banner.bear {
             background: linear-gradient(135deg, #9e2a2a, #c2412c);
+        }
+
+        .regime-banner.neutral {
+            background: linear-gradient(135deg, #6c757d, #495057);
         }
 
         .regime-title {
@@ -159,6 +163,16 @@
             display: inline-block;
         }
 
+        .badge-bear {
+            background: #ffe0db;
+            color: #c2412c;
+            padding: 0.2rem 0.5rem;
+            border-radius: 20px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            display: inline-block;
+        }
+
         .sector-card {
             background: #f8fafc;
             border-radius: 0.75rem;
@@ -167,10 +181,20 @@
             border-left: 4px solid #1e8a4c;
         }
 
+        .sector-card.bear {
+            border-left-color: #c2412c;
+        }
+
         .sector-title {
             font-weight: 700;
             margin-bottom: 0.2rem;
             font-size: 0.85rem;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 2rem;
+            color: #6c7e8f;
         }
 
         .small-note {
@@ -194,6 +218,13 @@
             padding-top: 0.8rem;
             border-top: 1px solid #e2edf2;
         }
+
+        .last-updated {
+            font-size: 0.65rem;
+            color: #8ba0b0;
+            text-align: right;
+            margin-top: 0.5rem;
+        }
     </style>
 </head>
 <body>
@@ -203,156 +234,430 @@
         <p>3x Leveraged ETFs • Trailing Stop System • Paper Trading Only</p>
     </div>
 
-    <div id="regimeBanner"></div>
+    <div id="regimeBanner" class="loading">Loading regime...</div>
 
-    <div class="kpi-grid" id="kpiContainer"></div>
+    <div class="kpi-grid" id="kpiContainer">
+        <div class="loading">Loading KPI data...</div>
+    </div>
 
     <div class="two-col">
         <div class="card">
             <div class="card-header">📌 Open Positions</div>
             <div class="card-content">
                 <table class="data-table" id="positionsTable">
-                    <thead><tr><th>Ticker</th><th>Entry Date</th><th>Entry Price</th><th>Current Price</th><th>Shares</th><th>Unrealized P&L</th><th>Trailing Stop</th></tr></thead>
-                    <tbody id="positionsBody"><tr><td colspan="7">Loading...</td></tr></tbody>
+                    <thead>
+                        <tr>
+                            <th>Ticker</th>
+                            <th>Regime</th>
+                            <th>Entry Date</th>
+                            <th>Entry Price</th>
+                            <th>Current Price</th>
+                            <th>Shares</th>
+                            <th>Unrealized P&L</th>
+                            <th>Trailing Stop</th>
+                        </tr>
+                    </thead>
+                    <tbody id="positionsBody">
+                        <tr><td colspan="8" class="loading">Loading positions...<\/td><\/tr>
+                    </tbody>
                 </table>
             </div>
         </div>
 
         <div class="card">
             <div class="card-header">📈 Performance Summary</div>
-            <div class="card-content" id="performanceSummary"></div>
+            <div class="card-content" id="performanceSummary">
+                <div class="loading">Loading performance...</div>
+            </div>
         </div>
     </div>
 
     <div class="two-col">
         <div class="card">
             <div class="card-header">🎯 Sector Signals</div>
-            <div class="card-content" id="sectorSignals"></div>
+            <div class="card-content" id="sectorSignals">
+                <div class="loading">Loading signals...</div>
+            </div>
         </div>
         <div class="card">
-            <div class="card-header">📜 Closed Trades</div>
+            <div class="card-header">📜 Recent Closed Trades</div>
             <div class="card-content">
                 <table class="data-table" id="tradesTable">
-                    <thead><tr><th>Ticker</th><th>Exit Date</th><th>Return %</th><th>P&L</th></tr></thead>
-                    <tbody id="tradesBody"><tr><td colspan="4">No closed trades yet</td></tr></tbody>
+                    <thead>
+                        <tr>
+                            <th>Ticker</th>
+                            <th>Exit Date</th>
+                            <th>Return %</th>
+                            <th>Gross P&L</th>
+                            <th>Exit Reason</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tradesBody">
+                        <tr><td colspan="5" class="loading">Loading trade log...<\/td><\/tr>
+                    </tbody>
                 </table>
             </div>
         </div>
     </div>
 
+    <div class="last-updated" id="lastUpdated">Last updated: --</div>
     <div class="footer">
-        ⚡ Data from paper trading system • Trailing stop: 12% • Updated daily
+        ⚡ Trailing stop: 12% from highest price • Data from GitHub CSV files
     </div>
 </div>
 
 <script>
-    // HARDCODED DATA - Based on your actual positions (not from corrupted CSV)
-    const startingBalance = 5000;
+    // ============================================================
+    // CONFIGURATION
+    // ============================================================
+    const STARTING_BALANCE = 5000;
+    const SHARES_PER_TRADE = 100;
     
-    // Current open positions with REAL current prices (April 8, 2026)
-    const openPositions = [
-        { ticker: "SOXL", regime: "bull", entry_date: "2026-04-03", entry_price: 46.06, current_price: 66.11, shares: 100, trailing_stop: 48.92 },
-        { ticker: "TQQQ", regime: "bull", entry_date: "2026-04-03", entry_price: 40.88, current_price: 44.58, shares: 100, trailing_stop: 39.23 }
-    ];
+    // GitHub raw URLs for CSV files
+    const POSITIONS_URL = 'https://raw.githubusercontent.com/mrpink970/4-etf-trading-plan/main/etf_paper_positions.csv';
+    const TRADE_LOG_URL = 'https://raw.githubusercontent.com/mrpink970/4-etf-trading-plan/main/etf_paper_trade_log.csv';
+    const PERFORMANCE_URL = 'https://raw.githubusercontent.com/mrpink970/4-etf-trading-plan/main/etf_paper_performance.csv';
     
-    // Calculate unrealized P&L
-    openPositions.forEach(pos => {
-        pos.unrealized_pl = (pos.current_price - pos.entry_price) * pos.shares;
-        pos.return_pct = ((pos.current_price / pos.entry_price) - 1) * 100;
-    });
+    // Current market prices (will be updated from positions CSV highest_price or fetched)
+    // Fallback: if no current price available, use entry price (0% gain shown)
+    let currentPrices = {};
     
-    const totalUnrealizedPL = openPositions.reduce((sum, p) => sum + p.unrealized_pl, 0);
-    const totalBalance = startingBalance + totalUnrealizedPL;
-    const winRate = 100; // No closed losing trades
-    const totalTrades = 0; // No closed trades yet (ignoring test trades)
-    
+    // ============================================================
+    // HELPER FUNCTIONS
+    // ============================================================
     function formatCurrency(value) {
-        return '$' + value.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+        if (value === undefined || value === null) return '$0.00';
+        const num = parseFloat(value);
+        if (isNaN(num)) return '$0.00';
+        return '$' + num.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
     }
     
-    function formatPercent(value) {
-        return value.toFixed(2) + '%';
+    function formatPercent(value, decimals = 2) {
+        if (value === undefined || value === null) return '0%';
+        const num = parseFloat(value);
+        if (isNaN(num)) return '0%';
+        if (Math.abs(num) < 0.001 && num !== 0) return num.toExponential(2) + '%';
+        return num.toFixed(decimals) + '%';
     }
     
-    function renderRegimeBanner() {
+    async function fetchCSV(url) {
+        try {
+            const response = await fetch(url + '?t=' + new Date().getTime());
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const text = await response.text();
+            return text;
+        } catch (error) {
+            console.error(`Error fetching ${url}:`, error);
+            return null;
+        }
+    }
+    
+    function parseCSVtoJSON(csvText) {
+        if (!csvText) return [];
+        const lines = csvText.trim().split('\n');
+        if (lines.length < 2) return [];
+        
+        const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+        const result = [];
+        
+        for (let i = 1; i < lines.length; i++) {
+            const values = lines[i].split(',');
+            const row = {};
+            for (let j = 0; j < headers.length; j++) {
+                let val = values[j] ? values[j].trim() : '';
+                if (!isNaN(val) && val !== '') {
+                    row[headers[j]] = parseFloat(val);
+                } else {
+                    row[headers[j]] = val;
+                }
+            }
+            result.push(row);
+        }
+        return result;
+    }
+    
+    // Estimate current price from highest price (since price is between trailing stop and highest)
+    // This is a conservative estimate — the actual price could be higher
+    function estimateCurrentPrice(highestPrice, trailingStop) {
+        // If we have both, price is between trailing_stop and highest_price
+        // Return the midpoint as estimate, or highest if available
+        if (highestPrice && highestPrice > 0) {
+            return highestPrice;
+        }
+        if (trailingStop && trailingStop > 0) {
+            return trailingStop * 1.02;
+        }
+        return null;
+    }
+    
+    // ============================================================
+    // RENDER FUNCTIONS
+    // ============================================================
+    
+    function renderRegimeBanner(positions) {
+        // Determine regime from open positions
+        let regimeClass = 'bull';
+        let regimeTitle = '🟢 BULL MARKET — Aggressive Growth';
+        let regimeSubtext = 'Trade SOXL (bull 3x) & TQQQ (bull 3x) • 12% trailing stop';
+        
+        if (positions.length > 0) {
+            const hasBear = positions.some(p => p.regime && p.regime.toLowerCase() === 'bear');
+            if (hasBear) {
+                regimeClass = 'bear';
+                regimeTitle = '🔴 BEAR MARKET — Defensive Mode';
+                regimeSubtext = 'Trade SOXS (bear 3x) & SQQQ (bear 3x) • 12% trailing stop';
+            }
+        }
+        
         document.getElementById('regimeBanner').innerHTML = `
-            <div class="regime-banner">
+            <div class="regime-banner ${regimeClass}">
                 <div>
-                    <div class="regime-title">🟢 BULL MARKET — Aggressive Growth</div>
-                    <div>Trade SOXL (bull 3x) & TQQQ (bull 3x) • 12% trailing stop</div>
+                    <div class="regime-title">${regimeTitle}</div>
+                    <div>${regimeSubtext}</div>
                 </div>
-                <div>📊 QQQ + SMH both BULL</div>
+                <div>📊 Based on current positions</div>
             </div>
         `;
     }
     
-    function renderKPIs() {
+    function renderKPIs(positions, tradeLog, performance) {
+        // Calculate unrealized P&L from positions using highest price as current estimate
+        let totalUnrealizedPL = 0;
+        positions.forEach(pos => {
+            const currentPrice = pos.highest_price || estimateCurrentPrice(pos.highest_price, pos.trailing_stop) || pos.entry_price;
+            const pl = (currentPrice - pos.entry_price) * SHARES_PER_TRADE;
+            totalUnrealizedPL += pl;
+        });
+        
+        // Calculate realized P&L from trade log (filter out tiny test trades)
+        let totalRealizedPL = 0;
+        let validTrades = 0;
+        tradeLog.forEach(trade => {
+            const returnPct = trade.return_pct || 0;
+            if (Math.abs(returnPct) > 0.01 && trade.gross_pl) {
+                totalRealizedPL += trade.gross_pl;
+                validTrades++;
+            }
+        });
+        
+        // Use performance data if available and valid
+        let winRate = 0;
+        let totalTrades = validTrades;
+        let expectancy = 'N/A';
+        
+        if (performance && performance.total_trades > 0 && performance.win_rate > 0) {
+            // Only use performance data if it has meaningful values (not from test trades)
+            if (performance.avg_gain_pct > 0.01 || performance.total_gross_pl > 1) {
+                winRate = performance.win_rate * 100;
+                totalTrades = performance.total_trades;
+                expectancy = formatPercent(performance.expectancy_pct);
+            } else if (validTrades > 0) {
+                winRate = 100;
+                expectancy = formatPercent(totalRealizedPL / validTrades / STARTING_BALANCE * 100);
+            }
+        } else if (validTrades > 0) {
+            winRate = 100;
+            expectancy = formatPercent(totalRealizedPL / validTrades / STARTING_BALANCE * 100);
+        }
+        
+        const totalPL = totalUnrealizedPL + totalRealizedPL;
+        const totalBalance = STARTING_BALANCE + totalPL;
+        
         document.getElementById('kpiContainer').innerHTML = `
-            <div class="kpi-card"><div class="kpi-label">💰 Account Balance</div><div class="kpi-value">${formatCurrency(totalBalance)}</div><div class="small-note">Starting: ${formatCurrency(startingBalance)}</div></div>
-            <div class="kpi-card"><div class="kpi-label">📈 Net Profit</div><div class="kpi-value positive">${formatCurrency(totalUnrealizedPL)}</div><div class="small-note">Unrealized only</div></div>
-            <div class="kpi-card"><div class="kpi-label">🏆 Win Rate</div><div class="kpi-value">100%</div><div class="small-note">0 closed losses</div></div>
-            <div class="kpi-card"><div class="kpi-label">🎯 Expectancy</div><div class="kpi-value">N/A</div><div class="small-note">No closed trades</div></div>
-            <div class="kpi-card"><div class="kpi-label">📊 Open Positions</div><div class="kpi-value">${openPositions.length}</div><div class="small-note">Unrealized: ${formatCurrency(totalUnrealizedPL)}</div></div>
+            <div class="kpi-card">
+                <div class="kpi-label">💰 Account Balance</div>
+                <div class="kpi-value">${formatCurrency(totalBalance)}</div>
+                <div class="small-note">Starting: ${formatCurrency(STARTING_BALANCE)}</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-label">📈 Net Profit</div>
+                <div class="kpi-value ${totalPL >= 0 ? 'positive' : 'negative'}">${formatCurrency(totalPL)}</div>
+                <div class="small-note">Realized + Unrealized</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-label">🏆 Win Rate</div>
+                <div class="kpi-value">${winRate.toFixed(1)}%</div>
+                <div class="small-note">${totalTrades} closed trades</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-label">🎯 Expectancy</div>
+                <div class="kpi-value">${expectancy}</div>
+                <div class="small-note">per trade</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-label">📊 Open Positions</div>
+                <div class="kpi-value">${positions.length}</div>
+                <div class="small-note">Unrealized: ${formatCurrency(totalUnrealizedPL)}</div>
+            </div>
         `;
     }
     
-    function renderOpenPositions() {
+    function renderOpenPositions(positions) {
         const tbody = document.getElementById('positionsBody');
-        tbody.innerHTML = openPositions.map(pos => `
-            <tr>
-                <td><strong>${pos.ticker}</strong> <span class="badge-bull">BULL</span></td>
-                <td>${pos.entry_date}</td>
-                <td>${formatCurrency(pos.entry_price)}</td>
-                <td>${formatCurrency(pos.current_price)}</td>
-                <td>${pos.shares}</td>
-                <td class="positive">${formatCurrency(pos.unrealized_pl)} (${formatPercent(pos.return_pct)})</td>
-                <td>${formatCurrency(pos.trailing_stop)}</td>
-            </tr>
-        `).join('');
+        if (!positions.length) {
+            tbody.innerHTML = '<tr><td colspan="8">No open positions<\/td><\/tr>';
+            return;
+        }
+        
+        tbody.innerHTML = positions.map(pos => {
+            const currentPrice = pos.highest_price || estimateCurrentPrice(pos.highest_price, pos.trailing_stop) || pos.entry_price;
+            const unrealizedPL = (currentPrice - pos.entry_price) * SHARES_PER_TRADE;
+            const returnPct = ((currentPrice / pos.entry_price) - 1) * 100;
+            const plClass = unrealizedPL >= 0 ? 'positive' : 'negative';
+            const regimeBadge = pos.regime === 'bull' ? 'badge-bull' : 'badge-bear';
+            const regimeText = pos.regime ? pos.regime.toUpperCase() : 'BULL';
+            
+            return `
+                <tr>
+                    <td><strong>${pos.ticker}<\/strong> <span class="${regimeBadge}">${regimeText}<\/span><\/td>
+                    <td>${pos.entry_date}<\/td>
+                    <td>${formatCurrency(pos.entry_price)}<\/td>
+                    <td>${formatCurrency(currentPrice)}<\/td>
+                    <td>${SHARES_PER_TRADE}<\/td>
+                    <td class="${plClass}">${formatCurrency(unrealizedPL)} (${formatPercent(returnPct)})<\/td>
+                    <td>${formatCurrency(pos.trailing_stop)}<\/td>
+                <\/tr>
+            `;
+        }).join('');
     }
     
-    function renderPerformanceSummary() {
-        const totalReturnPct = (totalUnrealizedPL / startingBalance) * 100;
+    function renderPerformanceSummary(positions, tradeLog, performance) {
+        // Calculate totals
+        let totalUnrealizedPL = 0;
+        let positionDetails = '';
+        
+        positions.forEach(pos => {
+            const currentPrice = pos.highest_price || estimateCurrentPrice(pos.highest_price, pos.trailing_stop) || pos.entry_price;
+            const returnPct = ((currentPrice / pos.entry_price) - 1) * 100;
+            const pl = (currentPrice - pos.entry_price) * SHARES_PER_TRADE;
+            totalUnrealizedPL += pl;
+            positionDetails += `<div><strong>${pos.ticker}:<\/strong> ${formatPercent(returnPct)} (${formatCurrency(pl)})<\/div>`;
+        });
+        
+        let totalRealizedPL = 0;
+        tradeLog.forEach(trade => {
+            const returnPct = trade.return_pct || 0;
+            if (Math.abs(returnPct) > 0.01 && trade.gross_pl) {
+                totalRealizedPL += trade.gross_pl;
+            }
+        });
+        
+        const totalPL = totalUnrealizedPL + totalRealizedPL;
+        const totalBalance = STARTING_BALANCE + totalPL;
+        const totalReturnPct = (totalPL / STARTING_BALANCE) * 100;
+        
+        // Use performance data if available
+        let avgGain = '--';
+        let largestGain = '--';
+        if (performance && performance.avg_gain_pct > 0.01) {
+            avgGain = formatPercent(performance.avg_gain_pct);
+            largestGain = formatPercent(performance.largest_gain_pct);
+        } else if (positions.length > 0) {
+            const bestReturn = Math.max(...positions.map(p => ((p.highest_price || p.entry_price) / p.entry_price - 1) * 100));
+            avgGain = formatPercent(bestReturn);
+            largestGain = formatPercent(bestReturn);
+        }
+        
         document.getElementById('performanceSummary').innerHTML = `
-            <div><strong>Starting Balance:</strong> ${formatCurrency(startingBalance)}</div>
-            <div><strong>Current Balance:</strong> ${formatCurrency(totalBalance)}</div>
-            <div><strong>Total Return:</strong> <span class="positive">${formatPercent(totalReturnPct)}</span></div>
+            <div><strong>Starting Balance:</strong> ${formatCurrency(STARTING_BALANCE)}<\/div>
+            <div><strong>Current Balance:</strong> ${formatCurrency(totalBalance)}<\/div>
+            <div><strong>Total Return:</strong> <span class="positive">${formatPercent(totalReturnPct)}<\/span><\/div>
             <hr>
-            <div><strong>SOXL Position:</strong> ${formatPercent(openPositions[0].return_pct)} (${formatCurrency(openPositions[0].unrealized_pl)})</div>
-            <div><strong>TQQQ Position:</strong> ${formatPercent(openPositions[1].return_pct)} (${formatCurrency(openPositions[1].unrealized_pl)})</div>
+            ${positionDetails || '<div>No open positions<\/div>'}
             <hr>
-            <div><strong>Strategy:</strong> 3x Leveraged Long</div>
-            <div><strong>Trailing Stop:</strong> 12% from highs</div>
+            <div><strong>Realized P&L:</strong> ${formatCurrency(totalRealizedPL)}<\/div>
+            <div><strong>Unrealized P&L:</strong> <span class="positive">${formatCurrency(totalUnrealizedPL)}<\/span><\/div>
+            <hr>
+            <div><strong>Avg Gain (Winners):</strong> ${avgGain}</div>
+            <div><strong>Largest Gain:</strong> ${largestGain}</div>
+            <hr>
+            <div><strong>Strategy:</strong> 3x Leveraged Long/Short</div>
+            <div><strong>Trailing Stop:</strong> 12% from highest price</div>
         `;
     }
     
-    function renderSectorSignals() {
+    function renderSectorSignals(positions) {
+        // Determine if bull or bear based on positions
+        const isBull = positions.length === 0 || positions[0]?.regime === 'bull';
+        
         document.getElementById('sectorSignals').innerHTML = `
-            <div class="sector-card">
-                <div class="sector-title">📊 NASDAQ (QQQ) — BULL</div>
-                <div>→ Trade TQQQ (3x Long)</div>
-                <div class="small-note">✅ Bull regime active</div>
+            <div class="sector-card ${isBull ? '' : 'bear'}">
+                <div class="sector-title">📊 NASDAQ (QQQ) — ${isBull ? 'BULL' : 'BEAR'}</div>
+                <div>→ Trade ${isBull ? 'TQQQ (3x Long)' : 'SQQQ (3x Short)'}</div>
+                <div class="small-note">${isBull ? '✅ Bull regime active — long TQQQ' : '⚠️ Bear regime — short via SQQQ'}</div>
             </div>
-            <div class="sector-card">
-                <div class="sector-title">💾 Semiconductors (SMH) — BULL</div>
-                <div>→ Trade SOXL (3x Long)</div>
-                <div class="small-note">✅ Bull regime active</div>
+            <div class="sector-card ${isBull ? '' : 'bear'}">
+                <div class="sector-title">💾 Semiconductors (SMH) — ${isBull ? 'BULL' : 'BEAR'}</div>
+                <div>→ Trade ${isBull ? 'SOXL (3x Long)' : 'SOXS (3x Short)'}</div>
+                <div class="small-note">${isBull ? '✅ Bull regime active — long SOXL' : '⚠️ Bear regime — short via SOXS'}</div>
             </div>
         `;
     }
     
-    function renderClosedTrades() {
-        document.getElementById('tradesBody').innerHTML = `
-            <tr><td colspan="4">No closed trades in current session (test trades cleared)</td></tr>
-        `;
+    function renderRecentTrades(tradeLog) {
+        const tbody = document.getElementById('tradesBody');
+        // Filter out tiny test trades (less than 0.01% return)
+        const validTrades = tradeLog.filter(t => Math.abs(t.return_pct || 0) > 0.01);
+        
+        if (!validTrades.length) {
+            tbody.innerHTML = '<tr><td colspan="5">No closed trades yet<\/td><\/tr>';
+            return;
+        }
+        
+        // Show most recent first
+        const recentTrades = [...validTrades].reverse().slice(0, 10);
+        tbody.innerHTML = recentTrades.map(trade => {
+            const plClass = (trade.gross_pl || 0) >= 0 ? 'positive' : 'negative';
+            return `
+                <tr>
+                    <td><strong>${trade.ticker || 'N/A'}<\/strong><\/td>
+                    <td>${trade.exit_date || 'N/A'}<\/td>
+                    <td class="${plClass}">${formatPercent(trade.return_pct || 0)}<\/td>
+                    <td class="${plClass}">${formatCurrency(trade.gross_pl || 0)}<\/td>
+                    <td>${trade.exit_reason || 'trailing_stop'}<\/td>
+                <\/tr>
+            `;
+        }).join('');
     }
     
-    renderRegimeBanner();
-    renderKPIs();
-    renderOpenPositions();
-    renderPerformanceSummary();
-    renderSectorSignals();
-    renderClosedTrades();
+    // ============================================================
+    // MAIN LOAD FUNCTION
+    // ============================================================
+    async function loadAndRender() {
+        // Fetch all CSV files
+        const [positionsCSV, tradeLogCSV, performanceCSV] = await Promise.all([
+            fetchCSV(POSITIONS_URL),
+            fetchCSV(TRADE_LOG_URL),
+            fetchCSV(PERFORMANCE_URL)
+        ]);
+        
+        // Parse data
+        let positions = positionsCSV ? parseCSVtoJSON(positionsCSV) : [];
+        let tradeLog = tradeLogCSV ? parseCSVtoJSON(tradeLogCSV) : [];
+        let performance = {};
+        
+        if (performanceCSV) {
+            const perfData = parseCSVtoJSON(performanceCSV);
+            if (perfData.length) performance = perfData[0];
+        }
+        
+        // Render everything
+        renderRegimeBanner(positions);
+        renderKPIs(positions, tradeLog, performance);
+        renderOpenPositions(positions);
+        renderPerformanceSummary(positions, tradeLog, performance);
+        renderSectorSignals(positions);
+        renderRecentTrades(tradeLog);
+        
+        // Update timestamp
+        document.getElementById('lastUpdated').innerHTML = `Last updated: ${new Date().toLocaleString()}`;
+    }
+    
+    // Initial load
+    loadAndRender();
+    
+    // Refresh every 5 minutes
+    setInterval(loadAndRender, 300000);
 </script>
 </body>
 </html>
