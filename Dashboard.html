@@ -41,28 +41,6 @@
             padding-left: 1rem;
         }
 
-        .regime-banner {
-            background: linear-gradient(135deg, #1e6b3b, #14804a);
-            color: white;
-            padding: 0.8rem 1.2rem;
-            border-radius: 1rem;
-            margin-bottom: 1.5rem;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 0.5rem;
-        }
-
-        .regime-banner.bear {
-            background: linear-gradient(135deg, #9e2a2a, #c2412c);
-        }
-
-        .regime-title {
-            font-size: 1.2rem;
-            font-weight: 700;
-        }
-
         .kpi-grid {
             display: flex;
             flex-wrap: wrap;
@@ -152,7 +130,7 @@
         .badge-bull {
             background: #e0f5e8;
             color: #1e6b3b;
-            padding: 0.2rem 0.5rem;
+            padding: 0.2rem 0.6rem;
             border-radius: 20px;
             font-size: 0.7rem;
             font-weight: 600;
@@ -231,15 +209,13 @@
         <p>3x Leveraged ETFs • Single Position • Trailing Stop System</p>
     </div>
 
-    <div id="regimeBanner" class="loading">Loading regime...</div>
-
     <div class="kpi-grid" id="kpiContainer">
         <div class="loading">Loading KPI data...</div>
     </div>
 
     <div class="two-col">
         <div class="card">
-            <div class="card-header">📌 Current Open Position</div>
+            <div class="card-header">📌 Open Position</div>
             <div class="card-content" id="positionCard">
                 <div class="loading">Loading position...</div>
             </div>
@@ -265,7 +241,7 @@
             <div class="card-content">
                 <table class="data-table" id="tradesTable">
                     <thead>
-                        <tr><th>Ticker</th><th>Exit Date</th><th>Return %</th><th>P&L</th><th>Reason</th></tr>
+                        <tr><th>Ticker</th><th>Exit Date</th><th>Return %</th><th>P&L</th><th>Exit Reason</th></tr>
                     </thead>
                     <tbody id="tradesBody">
                         <tr><td colspan="5" class="loading">Loading trade log...<\/td><\/tr>
@@ -290,7 +266,6 @@
     // GitHub raw URLs
     const POSITIONS_URL = 'https://raw.githubusercontent.com/mrpink970/4-etf-trading-plan/main/etf_paper_positions.csv';
     const TRADE_LOG_URL = 'https://raw.githubusercontent.com/mrpink970/4-etf-trading-plan/main/etf_paper_trade_log.csv';
-    const PERFORMANCE_URL = 'https://raw.githubusercontent.com/mrpink970/4-etf-trading-plan/main/etf_paper_performance.csv';
     const BALANCE_URL = 'https://raw.githubusercontent.com/mrpink970/4-etf-trading-plan/main/account_balance.csv';
     
     // Current market prices (from your data)
@@ -355,28 +330,6 @@
     // RENDER FUNCTIONS
     // ============================================================
     
-    function renderRegimeBanner(positions) {
-        let regimeClass = 'bull';
-        let regimeTitle = '🟢 BULL MARKET — Long SOXL';
-        let regimeSubtext = 'Single position • 12% trailing stop • Rotation enabled';
-        
-        if (positions.length > 0 && positions[0].regime === 'bear') {
-            regimeClass = 'bear';
-            regimeTitle = '🔴 BEAR MARKET — Short via SOXS/SQQQ';
-            regimeSubtext = 'Single position • 12% trailing stop • Rotation enabled';
-        }
-        
-        document.getElementById('regimeBanner').innerHTML = `
-            <div class="regime-banner ${regimeClass}">
-                <div>
-                    <div class="regime-title">${regimeTitle}</div>
-                    <div>${regimeSubtext}</div>
-                </div>
-                <div>📊 Based on QQQ + SMH signals</div>
-            </div>
-        `;
-    }
-    
     function renderKPIs(positions, tradeLog, currentBalance) {
         // Calculate from current position
         let totalUnrealizedPL = 0;
@@ -421,9 +374,9 @@
                 <div class="small-note">${validTrades} closed trades</div>
             </div>
             <div class="kpi-card">
-                <div class="kpi-label">📊 Current Return</div>
-                <div class="kpi-value positive">${formatPercent(currentReturn)}</div>
-                <div class="small-note">On open position</div>
+                <div class="kpi-label">📊 Open Positions</div>
+                <div class="kpi-value">${positions.length}</div>
+                <div class="small-note">Unrealized: ${formatCurrency(totalUnrealizedPL)}</div>
             </div>
         `;
     }
@@ -449,8 +402,8 @@
         
         container.innerHTML = `
             <div class="current-position-card">
-                <div class="sector-title">🎯 ${pos.ticker} — ${pos.regime ? pos.regime.toUpperCase() : 'BULL'}</div>
-                <div class="big-number">${formatPercent(returnPct)}</div>
+                <div><span class="badge-bull">${pos.regime ? pos.regime.toUpperCase() : 'BULL'}</span></div>
+                <div class="big-number">${pos.ticker} • ${formatPercent(returnPct)}</div>
                 <div style="margin: 0.5rem 0;">
                     Entry: ${formatCurrency(pos.entry_price)} | Current: ${formatCurrency(currentPrice)}
                 </div>
@@ -472,11 +425,7 @@
             const currentPrice = CURRENT_PRICES[pos.ticker] || pos.highest_price || pos.entry_price;
             totalUnrealizedPL = (currentPrice - pos.entry_price) * pos.shares;
             currentReturn = ((currentPrice / pos.entry_price) - 1) * 100;
-            positionDetails = `
-                <div class="current-position-card" style="margin-bottom: 0.5rem;">
-                    <strong>${pos.ticker}:</strong> ${formatPercent(currentReturn)} (${formatCurrency(totalUnrealizedPL)})
-                </div>
-            `;
+            positionDetails = `<div><strong>${pos.ticker}:</strong> ${formatPercent(currentReturn)} (${formatCurrency(totalUnrealizedPL)})</div>`;
         }
         
         let totalRealizedPL = 0;
@@ -528,22 +477,21 @@
         // Show only the sector for the current position
         if (positions.length > 0) {
             const pos = positions[0];
-            const isBull = pos.regime === 'bull';
             
             if (pos.ticker === 'SOXL') {
                 container.innerHTML = `
                     <div class="sector-card">
-                        <div class="sector-title">💾 Semiconductors (SMH) — ${isBull ? 'BULL' : 'BEAR'}</div>
-                        <div>→ Currently holding ${pos.ticker} (3x ${isBull ? 'Long' : 'Short'})</div>
-                        <div class="small-note">${isBull ? '✅ Bull regime active' : '⚠️ Bear regime active'}</div>
+                        <div class="sector-title">💾 Semiconductors (SMH) — BULL</div>
+                        <div>→ Currently holding ${pos.ticker} (3x Long)</div>
+                        <div class="small-note">✅ Bull regime active</div>
                     </div>
                 `;
             } else if (pos.ticker === 'TQQQ') {
                 container.innerHTML = `
                     <div class="sector-card">
-                        <div class="sector-title">📊 NASDAQ (QQQ) — ${isBull ? 'BULL' : 'BEAR'}</div>
-                        <div>→ Currently holding ${pos.ticker} (3x ${isBull ? 'Long' : 'Short'})</div>
-                        <div class="small-note">${isBull ? '✅ Bull regime active' : '⚠️ Bear regime active'}</div>
+                        <div class="sector-title">📊 NASDAQ (QQQ) — BULL</div>
+                        <div>→ Currently holding ${pos.ticker} (3x Long)</div>
+                        <div class="small-note">✅ Bull regime active</div>
                     </div>
                 `;
             } else {
@@ -571,7 +519,7 @@
         const validTrades = tradeLog.filter(t => Math.abs(t.return_pct || 0) > 0.01);
         
         if (!validTrades.length) {
-            tbody.innerHTML = '<td><td colspan="5">No closed trades yet<\/td><\/tr>';
+            tbody.innerHTML = '<tr><td colspan="5">No closed trades yet<\/td><\/tr>';
             return;
         }
         
@@ -611,7 +559,6 @@
             }
         }
         
-        renderRegimeBanner(positions);
         renderKPIs(positions, tradeLog, currentBalance);
         renderPositionCard(positions);
         renderPerformanceSummary(positions, tradeLog, currentBalance);
