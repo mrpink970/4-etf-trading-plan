@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>ETF Paper Trading Dashboard | Live CSV Data</title>
+    <title>ETF Paper Trading Dashboard | Single Position</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <style>
         * {
@@ -20,7 +20,7 @@
         }
 
         .dashboard {
-            max-width: 1400px;
+            max-width: 1200px;
             margin: 0 auto;
         }
 
@@ -56,10 +56,6 @@
 
         .regime-banner.bear {
             background: linear-gradient(135deg, #9e2a2a, #c2412c);
-        }
-
-        .regime-banner.neutral {
-            background: linear-gradient(135deg, #6c757d, #495057);
         }
 
         .regime-title {
@@ -137,7 +133,7 @@
         .data-table {
             width: 100%;
             border-collapse: collapse;
-            font-size: 0.75rem;
+            font-size: 0.8rem;
         }
 
         .data-table th {
@@ -158,17 +154,7 @@
             color: #1e6b3b;
             padding: 0.2rem 0.5rem;
             border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 600;
-            display: inline-block;
-        }
-
-        .badge-bear {
-            background: #ffe0db;
-            color: #c2412c;
-            padding: 0.2rem 0.5rem;
-            border-radius: 20px;
-            font-size: 0.65rem;
+            font-size: 0.7rem;
             font-weight: 600;
             display: inline-block;
         }
@@ -176,19 +162,30 @@
         .sector-card {
             background: #f8fafc;
             border-radius: 0.75rem;
-            padding: 0.7rem;
+            padding: 1rem;
             margin-bottom: 0.7rem;
             border-left: 4px solid #1e8a4c;
-        }
-
-        .sector-card.bear {
-            border-left-color: #c2412c;
+            text-align: center;
         }
 
         .sector-title {
             font-weight: 700;
-            margin-bottom: 0.2rem;
-            font-size: 0.85rem;
+            margin-bottom: 0.3rem;
+            font-size: 1rem;
+        }
+
+        .current-position-card {
+            background: #e8f5e9;
+            border-radius: 0.75rem;
+            padding: 1rem;
+            text-align: center;
+            border: 1px solid #c8e6c9;
+        }
+
+        .big-number {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #1e8a4c;
         }
 
         .loading {
@@ -231,7 +228,7 @@
 <div class="dashboard">
     <div class="header">
         <h1>📊 ETF Paper Trading Dashboard</h1>
-        <p>3x Leveraged ETFs • Trailing Stop System • Paper Trading Only</p>
+        <p>3x Leveraged ETFs • Single Position • Trailing Stop System</p>
     </div>
 
     <div id="regimeBanner" class="loading">Loading regime...</div>
@@ -242,25 +239,9 @@
 
     <div class="two-col">
         <div class="card">
-            <div class="card-header">📌 Open Positions</div>
-            <div class="card-content">
-                <table class="data-table" id="positionsTable">
-                    <thead>
-                        <tr>
-                            <th>Ticker</th>
-                            <th>Regime</th>
-                            <th>Entry Date</th>
-                            <th>Entry Price</th>
-                            <th>Current Price</th>
-                            <th>Shares</th>
-                            <th>Unrealized P&L</th>
-                            <th>Trailing Stop</th>
-                        </tr>
-                    </thead>
-                    <tbody id="positionsBody">
-                        <tr><td colspan="8" class="loading">Loading positions...<\/td><\/tr>
-                    </tbody>
-                </table>
+            <div class="card-header">📌 Current Open Position</div>
+            <div class="card-content" id="positionCard">
+                <div class="loading">Loading position...</div>
             </div>
         </div>
 
@@ -274,9 +255,9 @@
 
     <div class="two-col">
         <div class="card">
-            <div class="card-header">🎯 Sector Signals</div>
-            <div class="card-content" id="sectorSignals">
-                <div class="loading">Loading signals...</div>
+            <div class="card-header">🎯 Active Sector Signal</div>
+            <div class="card-content" id="sectorSignal">
+                <div class="loading">Loading signal...</div>
             </div>
         </div>
         <div class="card">
@@ -284,13 +265,7 @@
             <div class="card-content">
                 <table class="data-table" id="tradesTable">
                     <thead>
-                        <tr>
-                            <th>Ticker</th>
-                            <th>Exit Date</th>
-                            <th>Return %</th>
-                            <th>Gross P&L</th>
-                            <th>Exit Reason</th>
-                        </tr>
+                        <tr><th>Ticker</th><th>Exit Date</th><th>Return %</th><th>P&L</th><th>Reason</th></tr>
                     </thead>
                     <tbody id="tradesBody">
                         <tr><td colspan="5" class="loading">Loading trade log...<\/td><\/tr>
@@ -302,7 +277,7 @@
 
     <div class="last-updated" id="lastUpdated">Last updated: --</div>
     <div class="footer">
-        ⚡ Trailing stop: 12% from highest price • Data from GitHub CSV files
+        ⚡ Trailing stop: 12% from highest price • Single position rotation system
     </div>
 </div>
 
@@ -311,16 +286,18 @@
     // CONFIGURATION
     // ============================================================
     const STARTING_BALANCE = 5000;
-    const SHARES_PER_TRADE = 100;
     
-    // GitHub raw URLs for CSV files
+    // GitHub raw URLs
     const POSITIONS_URL = 'https://raw.githubusercontent.com/mrpink970/4-etf-trading-plan/main/etf_paper_positions.csv';
     const TRADE_LOG_URL = 'https://raw.githubusercontent.com/mrpink970/4-etf-trading-plan/main/etf_paper_trade_log.csv';
     const PERFORMANCE_URL = 'https://raw.githubusercontent.com/mrpink970/4-etf-trading-plan/main/etf_paper_performance.csv';
+    const BALANCE_URL = 'https://raw.githubusercontent.com/mrpink970/4-etf-trading-plan/main/account_balance.csv';
     
-    // Current market prices (will be updated from positions CSV highest_price or fetched)
-    // Fallback: if no current price available, use entry price (0% gain shown)
-    let currentPrices = {};
+    // Current market prices (from your data)
+    const CURRENT_PRICES = {
+        'SOXL': 67.19,
+        'TQQQ': 44.58
+    };
     
     // ============================================================
     // HELPER FUNCTIONS
@@ -336,16 +313,14 @@
         if (value === undefined || value === null) return '0%';
         const num = parseFloat(value);
         if (isNaN(num)) return '0%';
-        if (Math.abs(num) < 0.001 && num !== 0) return num.toExponential(2) + '%';
         return num.toFixed(decimals) + '%';
     }
     
-    async function fetchCSV(url) {
+    async function fetchFile(url) {
         try {
             const response = await fetch(url + '?t=' + new Date().getTime());
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const text = await response.text();
-            return text;
+            return await response.text();
         } catch (error) {
             console.error(`Error fetching ${url}:`, error);
             return null;
@@ -376,37 +351,19 @@
         return result;
     }
     
-    // Estimate current price from highest price (since price is between trailing stop and highest)
-    // This is a conservative estimate — the actual price could be higher
-    function estimateCurrentPrice(highestPrice, trailingStop) {
-        // If we have both, price is between trailing_stop and highest_price
-        // Return the midpoint as estimate, or highest if available
-        if (highestPrice && highestPrice > 0) {
-            return highestPrice;
-        }
-        if (trailingStop && trailingStop > 0) {
-            return trailingStop * 1.02;
-        }
-        return null;
-    }
-    
     // ============================================================
     // RENDER FUNCTIONS
     // ============================================================
     
     function renderRegimeBanner(positions) {
-        // Determine regime from open positions
         let regimeClass = 'bull';
-        let regimeTitle = '🟢 BULL MARKET — Aggressive Growth';
-        let regimeSubtext = 'Trade SOXL (bull 3x) & TQQQ (bull 3x) • 12% trailing stop';
+        let regimeTitle = '🟢 BULL MARKET — Long SOXL';
+        let regimeSubtext = 'Single position • 12% trailing stop • Rotation enabled';
         
-        if (positions.length > 0) {
-            const hasBear = positions.some(p => p.regime && p.regime.toLowerCase() === 'bear');
-            if (hasBear) {
-                regimeClass = 'bear';
-                regimeTitle = '🔴 BEAR MARKET — Defensive Mode';
-                regimeSubtext = 'Trade SOXS (bear 3x) & SQQQ (bear 3x) • 12% trailing stop';
-            }
+        if (positions.length > 0 && positions[0].regime === 'bear') {
+            regimeClass = 'bear';
+            regimeTitle = '🔴 BEAR MARKET — Short via SOXS/SQQQ';
+            regimeSubtext = 'Single position • 12% trailing stop • Rotation enabled';
         }
         
         document.getElementById('regimeBanner').innerHTML = `
@@ -415,21 +372,24 @@
                     <div class="regime-title">${regimeTitle}</div>
                     <div>${regimeSubtext}</div>
                 </div>
-                <div>📊 Based on current positions</div>
+                <div>📊 Based on QQQ + SMH signals</div>
             </div>
         `;
     }
     
-    function renderKPIs(positions, tradeLog, performance) {
-        // Calculate unrealized P&L from positions using highest price as current estimate
+    function renderKPIs(positions, tradeLog, currentBalance) {
+        // Calculate from current position
         let totalUnrealizedPL = 0;
-        positions.forEach(pos => {
-            const currentPrice = pos.highest_price || estimateCurrentPrice(pos.highest_price, pos.trailing_stop) || pos.entry_price;
-            const pl = (currentPrice - pos.entry_price) * SHARES_PER_TRADE;
-            totalUnrealizedPL += pl;
-        });
+        let currentReturn = 0;
         
-        // Calculate realized P&L from trade log (filter out tiny test trades)
+        if (positions.length > 0) {
+            const pos = positions[0];
+            const currentPrice = CURRENT_PRICES[pos.ticker] || pos.highest_price || pos.entry_price;
+            totalUnrealizedPL = (currentPrice - pos.entry_price) * pos.shares;
+            currentReturn = ((currentPrice / pos.entry_price) - 1) * 100;
+        }
+        
+        // Calculate realized P&L from trade log
         let totalRealizedPL = 0;
         let validTrades = 0;
         tradeLog.forEach(trade => {
@@ -440,28 +400,9 @@
             }
         });
         
-        // Use performance data if available and valid
-        let winRate = 0;
-        let totalTrades = validTrades;
-        let expectancy = 'N/A';
-        
-        if (performance && performance.total_trades > 0 && performance.win_rate > 0) {
-            // Only use performance data if it has meaningful values (not from test trades)
-            if (performance.avg_gain_pct > 0.01 || performance.total_gross_pl > 1) {
-                winRate = performance.win_rate * 100;
-                totalTrades = performance.total_trades;
-                expectancy = formatPercent(performance.expectancy_pct);
-            } else if (validTrades > 0) {
-                winRate = 100;
-                expectancy = formatPercent(totalRealizedPL / validTrades / STARTING_BALANCE * 100);
-            }
-        } else if (validTrades > 0) {
-            winRate = 100;
-            expectancy = formatPercent(totalRealizedPL / validTrades / STARTING_BALANCE * 100);
-        }
-        
         const totalPL = totalUnrealizedPL + totalRealizedPL;
-        const totalBalance = STARTING_BALANCE + totalPL;
+        const totalBalance = currentBalance || STARTING_BALANCE + totalPL;
+        const winRate = validTrades > 0 ? 100 : 0;
         
         document.getElementById('kpiContainer').innerHTML = `
             <div class="kpi-card">
@@ -476,63 +417,67 @@
             </div>
             <div class="kpi-card">
                 <div class="kpi-label">🏆 Win Rate</div>
-                <div class="kpi-value">${winRate.toFixed(1)}%</div>
-                <div class="small-note">${totalTrades} closed trades</div>
+                <div class="kpi-value">${winRate}%</div>
+                <div class="small-note">${validTrades} closed trades</div>
             </div>
             <div class="kpi-card">
-                <div class="kpi-label">🎯 Expectancy</div>
-                <div class="kpi-value">${expectancy}</div>
-                <div class="small-note">per trade</div>
-            </div>
-            <div class="kpi-card">
-                <div class="kpi-label">📊 Open Positions</div>
-                <div class="kpi-value">${positions.length}</div>
-                <div class="small-note">Unrealized: ${formatCurrency(totalUnrealizedPL)}</div>
+                <div class="kpi-label">📊 Current Return</div>
+                <div class="kpi-value positive">${formatPercent(currentReturn)}</div>
+                <div class="small-note">On open position</div>
             </div>
         `;
     }
     
-    function renderOpenPositions(positions) {
-        const tbody = document.getElementById('positionsBody');
+    function renderPositionCard(positions) {
+        const container = document.getElementById('positionCard');
+        
         if (!positions.length) {
-            tbody.innerHTML = '<tr><td colspan="8">No open positions<\/td><\/tr>';
+            container.innerHTML = `
+                <div class="current-position-card">
+                    <div style="font-size: 1.2rem; margin-bottom: 0.5rem;">📭 No Open Position</div>
+                    <div class="small-note">In cash • Waiting for next signal</div>
+                </div>
+            `;
             return;
         }
         
-        tbody.innerHTML = positions.map(pos => {
-            const currentPrice = pos.highest_price || estimateCurrentPrice(pos.highest_price, pos.trailing_stop) || pos.entry_price;
-            const unrealizedPL = (currentPrice - pos.entry_price) * SHARES_PER_TRADE;
-            const returnPct = ((currentPrice / pos.entry_price) - 1) * 100;
-            const plClass = unrealizedPL >= 0 ? 'positive' : 'negative';
-            const regimeBadge = pos.regime === 'bull' ? 'badge-bull' : 'badge-bear';
-            const regimeText = pos.regime ? pos.regime.toUpperCase() : 'BULL';
-            
-            return `
-                <tr>
-                    <td><strong>${pos.ticker}<\/strong> <span class="${regimeBadge}">${regimeText}<\/span><\/td>
-                    <td>${pos.entry_date}<\/td>
-                    <td>${formatCurrency(pos.entry_price)}<\/td>
-                    <td>${formatCurrency(currentPrice)}<\/td>
-                    <td>${SHARES_PER_TRADE}<\/td>
-                    <td class="${plClass}">${formatCurrency(unrealizedPL)} (${formatPercent(returnPct)})<\/td>
-                    <td>${formatCurrency(pos.trailing_stop)}<\/td>
-                <\/tr>
-            `;
-        }).join('');
+        const pos = positions[0];
+        const currentPrice = CURRENT_PRICES[pos.ticker] || pos.highest_price || pos.entry_price;
+        const unrealizedPL = (currentPrice - pos.entry_price) * pos.shares;
+        const returnPct = ((currentPrice / pos.entry_price) - 1) * 100;
+        const plClass = unrealizedPL >= 0 ? 'positive' : 'negative';
+        
+        container.innerHTML = `
+            <div class="current-position-card">
+                <div class="sector-title">🎯 ${pos.ticker} — ${pos.regime ? pos.regime.toUpperCase() : 'BULL'}</div>
+                <div class="big-number">${formatPercent(returnPct)}</div>
+                <div style="margin: 0.5rem 0;">
+                    Entry: ${formatCurrency(pos.entry_price)} | Current: ${formatCurrency(currentPrice)}
+                </div>
+                <div>Shares: ${pos.shares} | Unrealized: <span class="${plClass}">${formatCurrency(unrealizedPL)}</span></div>
+                <div class="small-note" style="margin-top: 0.5rem;">
+                    Trailing Stop: ${formatCurrency(pos.trailing_stop)} (12% from high of ${formatCurrency(pos.highest_price)})
+                </div>
+            </div>
+        `;
     }
     
-    function renderPerformanceSummary(positions, tradeLog, performance) {
-        // Calculate totals
+    function renderPerformanceSummary(positions, tradeLog, currentBalance) {
         let totalUnrealizedPL = 0;
+        let currentReturn = 0;
         let positionDetails = '';
         
-        positions.forEach(pos => {
-            const currentPrice = pos.highest_price || estimateCurrentPrice(pos.highest_price, pos.trailing_stop) || pos.entry_price;
-            const returnPct = ((currentPrice / pos.entry_price) - 1) * 100;
-            const pl = (currentPrice - pos.entry_price) * SHARES_PER_TRADE;
-            totalUnrealizedPL += pl;
-            positionDetails += `<div><strong>${pos.ticker}:<\/strong> ${formatPercent(returnPct)} (${formatCurrency(pl)})<\/div>`;
-        });
+        if (positions.length > 0) {
+            const pos = positions[0];
+            const currentPrice = CURRENT_PRICES[pos.ticker] || pos.highest_price || pos.entry_price;
+            totalUnrealizedPL = (currentPrice - pos.entry_price) * pos.shares;
+            currentReturn = ((currentPrice / pos.entry_price) - 1) * 100;
+            positionDetails = `
+                <div class="current-position-card" style="margin-bottom: 0.5rem;">
+                    <strong>${pos.ticker}:</strong> ${formatPercent(currentReturn)} (${formatCurrency(totalUnrealizedPL)})
+                </div>
+            `;
+        }
         
         let totalRealizedPL = 0;
         tradeLog.forEach(trade => {
@@ -543,68 +488,93 @@
         });
         
         const totalPL = totalUnrealizedPL + totalRealizedPL;
-        const totalBalance = STARTING_BALANCE + totalPL;
+        const totalBalance = currentBalance || STARTING_BALANCE + totalPL;
         const totalReturnPct = (totalPL / STARTING_BALANCE) * 100;
         
-        // Use performance data if available
-        let avgGain = '--';
-        let largestGain = '--';
-        if (performance && performance.avg_gain_pct > 0.01) {
-            avgGain = formatPercent(performance.avg_gain_pct);
-            largestGain = formatPercent(performance.largest_gain_pct);
-        } else if (positions.length > 0) {
-            const bestReturn = Math.max(...positions.map(p => ((p.highest_price || p.entry_price) / p.entry_price - 1) * 100));
-            avgGain = formatPercent(bestReturn);
-            largestGain = formatPercent(bestReturn);
+        // Get best return from current position or trade log
+        let bestReturn = currentReturn;
+        let avgGain = currentReturn;
+        
+        if (tradeLog.length > 0) {
+            const bestTrade = Math.max(...tradeLog.map(t => t.return_pct || 0));
+            if (bestTrade > bestReturn) bestReturn = bestTrade;
+            const validGains = tradeLog.filter(t => (t.return_pct || 0) > 0.01).map(t => t.return_pct);
+            if (validGains.length > 0) {
+                avgGain = validGains.reduce((a, b) => a + b, 0) / validGains.length;
+            }
         }
         
         document.getElementById('performanceSummary').innerHTML = `
-            <div><strong>Starting Balance:</strong> ${formatCurrency(STARTING_BALANCE)}<\/div>
-            <div><strong>Current Balance:</strong> ${formatCurrency(totalBalance)}<\/div>
-            <div><strong>Total Return:</strong> <span class="positive">${formatPercent(totalReturnPct)}<\/span><\/div>
+            <div><strong>Starting Balance:</strong> ${formatCurrency(STARTING_BALANCE)}</div>
+            <div><strong>Current Balance:</strong> ${formatCurrency(totalBalance)}</div>
+            <div><strong>Total Return:</strong> <span class="positive">${formatPercent(totalReturnPct)}</span></div>
             <hr>
-            ${positionDetails || '<div>No open positions<\/div>'}
+            ${positionDetails || '<div>No open position</div>'}
             <hr>
-            <div><strong>Realized P&L:</strong> ${formatCurrency(totalRealizedPL)}<\/div>
-            <div><strong>Unrealized P&L:</strong> <span class="positive">${formatCurrency(totalUnrealizedPL)}<\/span><\/div>
+            <div><strong>Realized P&L:</strong> ${formatCurrency(totalRealizedPL)}</div>
+            <div><strong>Unrealized P&L:</strong> <span class="positive">${formatCurrency(totalUnrealizedPL)}</span></div>
             <hr>
-            <div><strong>Avg Gain (Winners):</strong> ${avgGain}</div>
-            <div><strong>Largest Gain:</strong> ${largestGain}</div>
+            <div><strong>Avg Gain (Winners):</strong> ${formatPercent(avgGain)}</div>
+            <div><strong>Largest Gain:</strong> ${formatPercent(bestReturn)}</div>
             <hr>
-            <div><strong>Strategy:</strong> 3x Leveraged Long/Short</div>
+            <div><strong>Strategy:</strong> Single position • Rotation enabled</div>
             <div><strong>Trailing Stop:</strong> 12% from highest price</div>
         `;
     }
     
-    function renderSectorSignals(positions) {
-        // Determine if bull or bear based on positions
-        const isBull = positions.length === 0 || positions[0]?.regime === 'bull';
+    function renderSectorSignal(positions) {
+        const container = document.getElementById('sectorSignal');
         
-        document.getElementById('sectorSignals').innerHTML = `
-            <div class="sector-card ${isBull ? '' : 'bear'}">
-                <div class="sector-title">📊 NASDAQ (QQQ) — ${isBull ? 'BULL' : 'BEAR'}</div>
-                <div>→ Trade ${isBull ? 'TQQQ (3x Long)' : 'SQQQ (3x Short)'}</div>
-                <div class="small-note">${isBull ? '✅ Bull regime active — long TQQQ' : '⚠️ Bear regime — short via SQQQ'}</div>
-            </div>
-            <div class="sector-card ${isBull ? '' : 'bear'}">
-                <div class="sector-title">💾 Semiconductors (SMH) — ${isBull ? 'BULL' : 'BEAR'}</div>
-                <div>→ Trade ${isBull ? 'SOXL (3x Long)' : 'SOXS (3x Short)'}</div>
-                <div class="small-note">${isBull ? '✅ Bull regime active — long SOXL' : '⚠️ Bear regime — short via SOXS'}</div>
-            </div>
-        `;
+        // Show only the sector for the current position
+        if (positions.length > 0) {
+            const pos = positions[0];
+            const isBull = pos.regime === 'bull';
+            
+            if (pos.ticker === 'SOXL') {
+                container.innerHTML = `
+                    <div class="sector-card">
+                        <div class="sector-title">💾 Semiconductors (SMH) — ${isBull ? 'BULL' : 'BEAR'}</div>
+                        <div>→ Currently holding ${pos.ticker} (3x ${isBull ? 'Long' : 'Short'})</div>
+                        <div class="small-note">${isBull ? '✅ Bull regime active' : '⚠️ Bear regime active'}</div>
+                    </div>
+                `;
+            } else if (pos.ticker === 'TQQQ') {
+                container.innerHTML = `
+                    <div class="sector-card">
+                        <div class="sector-title">📊 NASDAQ (QQQ) — ${isBull ? 'BULL' : 'BEAR'}</div>
+                        <div>→ Currently holding ${pos.ticker} (3x ${isBull ? 'Long' : 'Short'})</div>
+                        <div class="small-note">${isBull ? '✅ Bull regime active' : '⚠️ Bear regime active'}</div>
+                    </div>
+                `;
+            } else {
+                container.innerHTML = `
+                    <div class="sector-card">
+                        <div class="sector-title">📊 Current Position: ${pos.ticker}</div>
+                        <div>→ ${pos.regime ? pos.regime.toUpperCase() : 'BULL'} regime</div>
+                    </div>
+                `;
+            }
+        } else {
+            container.innerHTML = `
+                <div class="sector-card">
+                    <div class="sector-title">📊 No Active Position</div>
+                    <div>Waiting for next signal</div>
+                    <div class="small-note">System will enter top-ranked ETF</div>
+                </div>
+            `;
+        }
     }
     
     function renderRecentTrades(tradeLog) {
         const tbody = document.getElementById('tradesBody');
-        // Filter out tiny test trades (less than 0.01% return)
+        // Filter out tiny test trades
         const validTrades = tradeLog.filter(t => Math.abs(t.return_pct || 0) > 0.01);
         
         if (!validTrades.length) {
-            tbody.innerHTML = '<tr><td colspan="5">No closed trades yet<\/td><\/tr>';
+            tbody.innerHTML = '<td><td colspan="5">No closed trades yet<\/td><\/tr>';
             return;
         }
         
-        // Show most recent first
         const recentTrades = [...validTrades].reverse().slice(0, 10);
         tbody.innerHTML = recentTrades.map(trade => {
             const plClass = (trade.gross_pl || 0) >= 0 ? 'positive' : 'negative';
@@ -624,39 +594,34 @@
     // MAIN LOAD FUNCTION
     // ============================================================
     async function loadAndRender() {
-        // Fetch all CSV files
-        const [positionsCSV, tradeLogCSV, performanceCSV] = await Promise.all([
-            fetchCSV(POSITIONS_URL),
-            fetchCSV(TRADE_LOG_URL),
-            fetchCSV(PERFORMANCE_URL)
+        const [positionsCSV, tradeLogCSV, balanceCSV] = await Promise.all([
+            fetchFile(POSITIONS_URL),
+            fetchFile(TRADE_LOG_URL),
+            fetchFile(BALANCE_URL)
         ]);
         
-        // Parse data
         let positions = positionsCSV ? parseCSVtoJSON(positionsCSV) : [];
         let tradeLog = tradeLogCSV ? parseCSVtoJSON(tradeLogCSV) : [];
-        let performance = {};
+        let currentBalance = STARTING_BALANCE;
         
-        if (performanceCSV) {
-            const perfData = parseCSVtoJSON(performanceCSV);
-            if (perfData.length) performance = perfData[0];
+        if (balanceCSV) {
+            const balanceData = parseCSVtoJSON(balanceCSV);
+            if (balanceData.length > 0 && balanceData[balanceData.length - 1].balance) {
+                currentBalance = balanceData[balanceData.length - 1].balance;
+            }
         }
         
-        // Render everything
         renderRegimeBanner(positions);
-        renderKPIs(positions, tradeLog, performance);
-        renderOpenPositions(positions);
-        renderPerformanceSummary(positions, tradeLog, performance);
-        renderSectorSignals(positions);
+        renderKPIs(positions, tradeLog, currentBalance);
+        renderPositionCard(positions);
+        renderPerformanceSummary(positions, tradeLog, currentBalance);
+        renderSectorSignal(positions);
         renderRecentTrades(tradeLog);
         
-        // Update timestamp
         document.getElementById('lastUpdated').innerHTML = `Last updated: ${new Date().toLocaleString()}`;
     }
     
-    // Initial load
     loadAndRender();
-    
-    // Refresh every 5 minutes
     setInterval(loadAndRender, 300000);
 </script>
 </body>
