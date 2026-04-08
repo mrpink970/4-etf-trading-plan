@@ -21,8 +21,11 @@ ACCOUNT_BALANCE_PATH = Path("account_balance.csv")
 # Trading parameters
 MAX_TRADES = 1  # Only hold ONE position at a time
 TRAILING_STOP_PCT = 0.12
-POSITION_SIZE_PCT = 0.95  # Use 95% of account balance per trade (single position)
+POSITION_SIZE_PCT = 0.95  # Use 95% of account balance per trade
 STARTING_BALANCE = 5000.0
+
+# Cash zone threshold - only trade when |score| >= this value
+MIN_TRADE_SCORE = 5.0
 
 # Ranking weights
 RANKING_WEIGHTS = {
@@ -182,11 +185,6 @@ def extract_latest_prices_and_returns(df: pd.DataFrame) -> Tuple[str, Dict[str, 
     latest_row = df.sort_values("Date").iloc[-1]
     latest_date = str(latest_row["Date"])
     
-    # Get previous rows for return calculations
-    prev_row = None
-    if len(df) >= 2:
-        prev_row = df.sort_values("Date").iloc[-2]
-    
     prices: Dict[str, Dict[str, Optional[float]]] = {}
     returns: Dict[str, Dict[str, Optional[float]]] = {}
     
@@ -217,14 +215,33 @@ def extract_latest_prices_and_returns(df: pd.DataFrame) -> Tuple[str, Dict[str, 
             "3d": safe_float(latest_row.get(three_d_col)),
             "5d": safe_float(latest_row.get(five_d_col)),
         }
-        
-        # If returns not in sheet, calculate from price data
-        if returns[etf]["1d"] is None and prev_row is not None:
-            prev_close = safe_float(prev_row.get(close_col))
-            if prev_close and prev_close > 0 and close_val:
-                returns[etf]["1d"] = ((close_val - prev_close) / prev_close) * 100
 
     return latest_date, prices, returns
+
+
+def calculate_etf_score(returns: Dict[str, Optional[float]]) -> float:
+    """Calculate a single ETF's score based on returns"""
+    ret_1d = returns.get("1d", 0) or 0
+    ret_3d = returns.get("3d", 0) or 0
+    ret_5d = returns.get("5d", 0) or 0
+    
+    # Weighted return component
+    score = (ret_1d * RANKING_WEIGHTS['1d_return'] +
+             ret_3d * RANKING_WEIGHTS['3d_return'] +
+             ret_5d * RANKING_WEIGHTS['5d_return'])
+    
+    # Trend strength bonus/penalty
+    if ret_1d > 0 and ret_3d > 0 and ret_5d > 0:
+        score += 5 * RANKING_WEIGHTS['trend_strength']
+    elif ret_1d < 0 and ret_3d < 0 and ret_5d < 0:
+        score -= 5 * RANKING_WEIGHTS['trend_strength']
+    
+    # Volatility adjustment (lower volatility = slightly better)
+    volatility = abs(ret_1d - ret_3d) if ret_1d and ret_3d else 0
+    volatility_score = max(0, 10 - volatility) * RANKING_WEIGHTS['volatility_score']
+    score += volatility_score
+    
+    return round(score, 4)
 
 
 def rank_etfs(returns: Dict[str, Dict[str, Optional[float]]], regime: str) -> List[Tuple[str, float]]:
@@ -240,30 +257,9 @@ def rank_etfs(returns: Dict[str, Dict[str, Optional[float]]], regime: str) -> Li
         return []  # Neutral regime, no trades
     
     for etf in eligible_etfs:
-        score = 0.0
-        
-        # Get returns (default to 0 if missing)
-        ret_1d = returns.get(etf, {}).get("1d", 0) or 0
-        ret_3d = returns.get(etf, {}).get("3d", 0) or 0
-        ret_5d = returns.get(etf, {}).get("5d", 0) or 0
-        
-        # Calculate weighted score (higher returns = better)
-        score += ret_1d * RANKING_WEIGHTS['1d_return']
-        score += ret_3d * RANKING_WEIGHTS['3d_return']
-        score += ret_5d * RANKING_WEIGHTS['5d_return']
-        
-        # Trend strength: consistent positive returns across periods
-        if ret_1d > 0 and ret_3d > 0 and ret_5d > 0:
-            score += 5 * RANKING_WEIGHTS['trend_strength']
-        elif ret_1d < 0 and ret_3d < 0 and ret_5d < 0:
-            score -= 5 * RANKING_WEIGHTS['trend_strength']
-        
-        # Volatility adjustment (lower volatility = slightly better)
-        volatility = abs(ret_1d - ret_3d) if ret_1d and ret_3d else 0
-        volatility_score = max(0, 10 - volatility) * RANKING_WEIGHTS['volatility_score']
-        score += volatility_score
-        
-        scores[etf] = round(score, 4)
+        etf_returns = returns.get(etf, {})
+        score = calculate_etf_score(etf_returns)
+        scores[etf] = score
     
     # Sort by score descending
     sorted_etfs = sorted(scores.items(), key=lambda x: x[1], reverse=True)
@@ -325,7 +321,6 @@ def load_positions() -> pd.DataFrame:
         df = pd.read_csv(POSITIONS_PATH)
         if df.empty:
             return pd.DataFrame(columns=cols)
-        # Add missing columns if needed
         for col in cols:
             if col not in df.columns:
                 df[col] = None
@@ -368,7 +363,6 @@ def save_positions(df: pd.DataFrame) -> None:
     if df.empty:
         pd.DataFrame(columns=cols).to_csv(POSITIONS_PATH, index=False)
     else:
-        # Ensure all columns exist
         for col in cols:
             if col not in df.columns:
                 df[col] = None
@@ -479,13 +473,20 @@ def update_trailing_stops(
     return out
 
 
+def get_current_score(ticker: str, returns: Dict[str, Dict[str, Optional[float]]]) -> float:
+    """Get the current score for a specific ticker"""
+    etf_returns = returns.get(ticker, {})
+    return calculate_etf_score(etf_returns)
+
+
 def build_exit_list(
     positions: pd.DataFrame,
     current_regime: str,
     ranked_etfs: List[Tuple[str, float]],
     prices: Dict[str, Dict[str, Optional[float]]],
+    returns: Dict[str, Dict[str, Optional[float]]],
 ) -> list[dict[str, str]]:
-    """Build exit list including rotation to higher-ranked ETFs"""
+    """Build exit list including cash zone exits and rotation"""
     exits: list[dict[str, str]] = []
 
     if positions.empty:
@@ -495,10 +496,18 @@ def build_exit_list(
         ticker = normalize_text(row["ticker"])
         held_regime = normalize_text(row["regime"]).lower()
         entry_score = safe_float(row.get("rank_score_at_entry", 0)) or 0
+        
+        # Get current score for this ticker
+        current_score = get_current_score(ticker, returns)
 
         # Exit on regime flip
         if current_regime != "neutral" and held_regime != current_regime:
             exits.append({"ticker": ticker, "reason": "regime_flip"})
+            continue
+
+        # CASH ZONE EXIT: Exit if score falls into cash zone (-5 to +5)
+        if abs(current_score) < MIN_TRADE_SCORE:
+            exits.append({"ticker": ticker, "reason": f"cash_zone_score_{current_score:.1f}"})
             continue
 
         # Check trailing stop
@@ -513,7 +522,7 @@ def build_exit_list(
             best_etf, best_score = ranked_etfs[0]
             
             # If current position is not the top-ranked ETF and the top ETF has a significantly higher score
-            if best_etf != ticker and best_score > entry_score + 2.0:  # 2 point threshold to avoid churn
+            if best_etf != ticker and best_score > entry_score + 2.0:
                 exits.append({"ticker": ticker, "reason": f"rotation_to_{best_etf}"})
 
     return exits
@@ -624,27 +633,39 @@ def apply_entries(
     prices: Dict[str, Dict[str, Optional[float]]],
     account_balance: float,
 ) -> pd.DataFrame:
-    if current_regime == "neutral":
+    # If we already have a position, don't enter another
+    if len(positions) >= MAX_TRADES:
         return positions
 
-    # If we already have a position, don't enter another (MAX_TRADES = 1)
-    if len(positions) >= MAX_TRADES:
+    # Neutral regime — stay in cash
+    if current_regime == "neutral":
+        print("Neutral regime — staying in cash")
+        return positions
+
+    # No ranked ETFs — stay in cash
+    if not ranked_etfs:
+        print("No ranked ETFs available — staying in cash")
+        return positions
+
+    # Check if top ETF meets minimum score threshold (cash zone)
+    top_etf, top_score = ranked_etfs[0]
+    
+    if abs(top_score) < MIN_TRADE_SCORE:
+        print(f"Cash zone: top ETF '{top_etf}' score {top_score:.2f} (|score| < {MIN_TRADE_SCORE}) — staying in cash")
         return positions
 
     current = positions.copy()
     held = set(current["ticker"].astype(str).str.upper().tolist()) if not current.empty else set()
 
-    # Enter the top-ranked ETF if not already held
-    for ticker, score in ranked_etfs:
-        if ticker in held:
-            continue
-        
-        row = build_position_row(ticker, current_regime, asof_date, prices, account_balance, score)
-        if row is None:
-            continue
+    if top_etf in held:
+        return current
 
-        current = pd.concat([current, pd.DataFrame([row])], ignore_index=True)
-        break  # Only enter one position
+    row = build_position_row(top_etf, current_regime, asof_date, prices, account_balance, top_score)
+    if row is None:
+        return current
+
+    current = pd.concat([current, pd.DataFrame([row])], ignore_index=True)
+    print(f"Entering {top_etf} with score {top_score:.2f}")
 
     return current
 
@@ -665,7 +686,8 @@ def send_email_summary(asof_date: str, primary_etf: str, secondary_etf: str,
     # Build ranking display
     ranking_text = "\n📊 ETF RANKINGS:\n"
     for i, (etf, score) in enumerate(ranked_etfs[:4], 1):
-        ranking_text += f"   {i}. {etf}: {score:.2f}\n"
+        cash_zone = " (CASH ZONE)" if abs(score) < MIN_TRADE_SCORE else ""
+        ranking_text += f"   {i}. {etf}: {score:.2f}{cash_zone}\n"
     
     body = f"""
 ═══════════════════════════════════════════════════════════
@@ -675,6 +697,7 @@ def send_email_summary(asof_date: str, primary_etf: str, secondary_etf: str,
 📊 MARKET REGIME: {regime.upper()}
 🎯 SIGNAL: {primary_etf} / {secondary_etf}
 💰 ACCOUNT BALANCE: ${account_balance:,.2f}
+📈 MIN TRADE SCORE: {MIN_TRADE_SCORE} (cash zone below this)
 {ranking_text}
 """
     
@@ -742,8 +765,9 @@ Generated by GitHub Actions - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 def main() -> None:
     print("=" * 50)
-    print("ETF PAPER TRADING SYSTEM (Single Position + Ranking)")
+    print("ETF PAPER TRADING SYSTEM (Single Position + Cash Zone)")
     print("=" * 50)
+    print(f"Cash Zone: |score| < {MIN_TRADE_SCORE} → Exit to cash / No entries")
     
     try:
         state = load_workbook_state(WORKBOOK_PATH)
@@ -770,7 +794,8 @@ def main() -> None:
     ranked_etfs = rank_etfs(returns, current_regime)
     print(f"\n📊 ETF Rankings for {current_regime.upper()} regime:")
     for i, (etf, score) in enumerate(ranked_etfs[:4], 1):
-        print(f"   {i}. {etf}: {score:.2f}")
+        cash_zone = " (CASH ZONE)" if abs(score) < MIN_TRADE_SCORE else ""
+        print(f"   {i}. {etf}: {score:.2f}{cash_zone}")
     
     # Load account balance
     account_balance = load_account_balance()
@@ -791,12 +816,13 @@ def main() -> None:
     # Update trailing stops
     positions = update_trailing_stops(old_positions, prices)
     
-    # Build exit list (including rotation)
+    # Build exit list (including cash zone exits)
     exits = build_exit_list(
         positions=positions,
         current_regime=current_regime,
         ranked_etfs=ranked_etfs,
         prices=prices,
+        returns=returns,
     )
     
     # Track exits before applying
@@ -831,18 +857,21 @@ def main() -> None:
         current_balance=account_balance,
     )
     
-    # Process entries (only if we have no position)
+    # Process entries (only if we have no position and top score is strong)
     if len(positions) == 0 and ranked_etfs:
         top_etf, top_score = ranked_etfs[0]
-        entry_price = prices.get(top_etf, {}).get("open")
-        if entry_price:
-            shares = calculate_position_shares(updated_balance, entry_price)
-            new_entries.append({
-                "ticker": top_etf,
-                "price": entry_price,
-                "shares": shares,
-                "stop": entry_price * (1 - TRAILING_STOP_PCT),
-            })
+        if abs(top_score) >= MIN_TRADE_SCORE:
+            entry_price = prices.get(top_etf, {}).get("open")
+            if entry_price:
+                shares = calculate_position_shares(updated_balance, entry_price)
+                new_entries.append({
+                    "ticker": top_etf,
+                    "price": entry_price,
+                    "shares": shares,
+                    "stop": entry_price * (1 - TRAILING_STOP_PCT),
+                })
+        else:
+            print(f"Cash zone: top score {top_score:.2f} < {MIN_TRADE_SCORE} — no entry")
     
     positions = apply_entries(
         positions=positions,
@@ -891,6 +920,8 @@ def main() -> None:
         pos = positions.iloc[0]
         print(f"  • {pos['ticker']}: {int(pos['shares'])} shares @ ${pos['entry_price']:.2f}")
         print(f"    Stop: ${pos['trailing_stop']:.2f}")
+    else:
+        print("  • In cash (no position)")
     print(f"Closed trades logged: {len(trade_log)}")
     
     if new_entries:
