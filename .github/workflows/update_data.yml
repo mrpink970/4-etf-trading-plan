@@ -2,8 +2,8 @@ name: Update ETF Data
 
 on:
   schedule:
-    - cron: '15 23 * * 1-5'
-    - cron: '30 23 * * 1-5'
+    - cron: '15 23 * * 1-5'   # 23:15 UTC weekdays
+    - cron: '30 23 * * 1-5'   # 23:30 UTC weekdays (backup)
   workflow_dispatch:
 
 permissions:
