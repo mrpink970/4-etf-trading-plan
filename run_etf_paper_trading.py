@@ -40,8 +40,6 @@ BULL_ETFS = {"SOXL", "TQQQ"}
 BEAR_ETFS = {"SOXS", "SQQQ"}
 ALL_ETFS = BULL_ETFS | BEAR_ETFS
 
-LAST_RUN_PATH = Path("last_processed_date.txt")
-
 
 def normalize_text(value) -> str:
     if value is None:
@@ -64,24 +62,6 @@ def determine_regime(primary_etf: str) -> str:
     if primary_etf in BEAR_ETFS:
         return "bear"
     return "neutral"
-
-
-def get_last_processed_date() -> Optional[str]:
-    if LAST_RUN_PATH.exists():
-        try:
-            with open(LAST_RUN_PATH, 'r') as f:
-                return f.read().strip()
-        except Exception:
-            return None
-    return None
-
-
-def save_last_processed_date(date: str) -> None:
-    try:
-        with open(LAST_RUN_PATH, 'w') as f:
-            f.write(date)
-    except Exception:
-        pass
 
 
 def load_account_balance() -> float:
@@ -268,6 +248,7 @@ def rank_etfs(returns: Dict[str, Dict[str, Optional[float]]], regime: str) -> Li
 
 
 def load_workbook_state(path: Path) -> Dict[str, object]:
+    """Load state from workbook - uses Daily_Data for date, Signal sheet for ETFs"""
     if not path.exists():
         raise FileNotFoundError(f"Workbook not found: {path}")
 
@@ -283,21 +264,17 @@ def load_workbook_state(path: Path) -> Dict[str, object]:
 
     primary_etf = normalize_text(signal_ws["D23"].value)
     secondary_etf = normalize_text(signal_ws["D24"].value)
-    signal_date_raw = signal_ws["D27"].value
 
+    # Get the latest date from Daily_Data (source of truth)
     daily_df = read_daily_data_wide(daily_ws)
     daily_date, prices, returns = extract_latest_prices_and_returns(daily_df)
 
-    if signal_date_raw is not None:
-        try:
-            signal_date = str(pd.to_datetime(signal_date_raw).date())
-        except Exception:
-            signal_date = daily_date
-    else:
-        signal_date = daily_date
+    # Use Daily_Data date as the authoritative date
+    # Signal sheet D27 is IGNORED to prevent stale date issues
+    asof_date = daily_date
 
     return {
-        "date": signal_date,
+        "date": asof_date,
         "primary_etf": primary_etf,
         "secondary_etf": secondary_etf,
         "regime": determine_regime(primary_etf),
@@ -782,13 +759,7 @@ def main() -> None:
     prices = state["prices"]
     returns = state["returns"]
     
-    # Check for duplicate processing
-    last_processed = get_last_processed_date()
-    if last_processed == asof_date:
-        print(f"Date {asof_date} already processed. Skipping.")
-        return
-    else:
-        print(f"Processing new date: {asof_date}")
+    print(f"\n📅 Processing date: {asof_date} (from Daily_Data)")
     
     # Rank ETFs for this regime
     ranked_etfs = rank_etfs(returns, current_regime)
@@ -805,9 +776,6 @@ def main() -> None:
     old_positions = load_positions()
     old_trade_log = load_trade_log()
     
-    print(f"\n📅 Date: {asof_date}")
-    print(f"🎯 Signal: {primary_etf} / {secondary_etf}")
-    print(f"📈 Regime: {current_regime}")
     print(f"📌 Existing positions: {len(old_positions)}")
     
     new_entries = []
@@ -891,9 +859,6 @@ def main() -> None:
     if updated_balance != account_balance:
         update_account_balance(asof_date, updated_balance)
     
-    # Save processed date
-    save_last_processed_date(asof_date)
-    
     # Send email
     send_email_summary(
         asof_date=asof_date,
@@ -930,9 +895,3 @@ def main() -> None:
     if new_exits:
         print(f"\n🔴 Position closed: {new_exits[0]['ticker']} - {new_exits[0]['return_pct']:.1f}% (${new_exits[0]['pl']:.2f})")
         print(f"    Reason: {new_exits[0]['reason']}")
-    
-    print("=" * 50)
-
-
-if __name__ == "__main__":
-    main()
