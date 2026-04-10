@@ -746,10 +746,17 @@ def main() -> None:
     print("=" * 50)
     print(f"Cash Zone: |score| < {MIN_TRADE_SCORE} → Exit to cash / No entries")
     
+    # DEBUG: Print current directory and check if files exist
+    print(f"\n[DEBUG] Current working directory: {os.getcwd()}")
+    print(f"[DEBUG] Workbook exists: {WORKBOOK_PATH.exists()}")
+    print(f"[DEBUG] Files in directory: {[f for f in os.listdir('.') if f.endswith('.xlsx')]}")
+    
     try:
         state = load_workbook_state(WORKBOOK_PATH)
     except Exception as e:
         print(f"ERROR loading workbook: {e}")
+        import traceback
+        traceback.print_exc()
         return
     
     asof_date = state["date"]
@@ -895,3 +902,9 @@ def main() -> None:
     if new_exits:
         print(f"\n🔴 Position closed: {new_exits[0]['ticker']} - {new_exits[0]['return_pct']:.1f}% (${new_exits[0]['pl']:.2f})")
         print(f"    Reason: {new_exits[0]['reason']}")
+    
+    print("=" * 50)
+
+
+if __name__ == "__main__":
+    main()
