@@ -242,13 +242,11 @@
 </div>
 
 <script>
-    // GitHub raw URLs for CSV files
+    const STARTING_BALANCE = 5000;
+    
+    // GitHub raw URLs
     const POSITIONS_URL = 'https://raw.githubusercontent.com/mrpink970/4-etf-trading-plan/main/etf_paper_positions.csv';
     const TRADE_LOG_URL = 'https://raw.githubusercontent.com/mrpink970/4-etf-trading-plan/main/etf_paper_trade_log.csv';
-    const PERFORMANCE_URL = 'https://raw.githubusercontent.com/mrpink970/4-etf-trading-plan/main/etf_paper_performance.csv';
-    const ACCOUNT_BALANCE_URL = 'https://raw.githubusercontent.com/mrpink970/4-etf-trading-plan/main/account_balance.csv';
-    
-    const STARTING_BALANCE = 5000;
 
     async function fetchCSV(url) {
         try {
@@ -300,49 +298,13 @@
     }
 
     async function loadAndRender() {
-        // Fetch all data
-        const [positionsCSV, tradeLogCSV, performanceCSV, balanceCSV] = await Promise.all([
+        const [positionsCSV, tradeLogCSV] = await Promise.all([
             fetchCSV(POSITIONS_URL),
-            fetchCSV(TRADE_LOG_URL),
-            fetchCSV(PERFORMANCE_URL),
-            fetchCSV(ACCOUNT_BALANCE_URL)
+            fetchCSV(TRADE_LOG_URL)
         ]);
         
         let positions = positionsCSV ? parseCSVtoJSON(positionsCSV) : [];
         let tradeLog = tradeLogCSV ? parseCSVtoJSON(tradeLogCSV) : [];
-        let performance = performanceCSV ? parseCSVtoJSON(performanceCSV) : [];
-        let balanceData = balanceCSV ? parseCSVtoJSON(balanceCSV) : [];
-        
-        // Get latest balance (cash balance from closed trades)
-        let cashBalance = STARTING_BALANCE;
-        if (balanceData.length > 0 && balanceData[balanceData.length - 1].balance) {
-            cashBalance = balanceData[balanceData.length - 1].balance;
-        }
-        
-        // Calculate unrealized P&L from positions
-        let unrealizedPL = 0;
-        let currentPosition = null;
-        let highestPrice = 0;
-        let trailingStop = 0;
-        let entryPrice = 0;
-        let entryDate = '';
-        let shares = 0;
-        
-        if (positions.length > 0) {
-            const pos = positions[0];
-            entryPrice = pos.entry_price;
-            shares = pos.shares;
-            highestPrice = pos.highest_price;
-            trailingStop = pos.trailing_stop;
-            entryDate = pos.entry_date;
-            unrealizedPL = (highestPrice - entryPrice) * shares;
-            currentPosition = pos;
-        }
-        
-        // Calculate total equity
-        const totalEquity = cashBalance + unrealizedPL;
-        const totalReturn = totalEquity - STARTING_BALANCE;
-        const totalReturnPct = (totalReturn / STARTING_BALANCE) * 100;
         
         // Calculate realized P&L from trade log
         let realizedPL = 0;
@@ -354,19 +316,49 @@
             }
         });
         
+        // Calculate unrealized P&L from positions
+        let unrealizedPL = 0;
+        let currentPosition = null;
+        let highestPrice = 0;
+        let trailingStop = 0;
+        let entryPrice = 0;
+        let entryDate = '';
+        let shares = 0;
+        let ticker = '';
+        let regime = '';
+        
+        if (positions.length > 0) {
+            const pos = positions[0];
+            entryPrice = pos.entry_price;
+            shares = pos.shares;
+            highestPrice = pos.highest_price;
+            trailingStop = pos.trailing_stop;
+            entryDate = pos.entry_date;
+            ticker = pos.ticker;
+            regime = pos.regime;
+            unrealizedPL = (highestPrice - entryPrice) * shares;
+            currentPosition = pos;
+        }
+        
+        // Calculate totals
+        const cashBalance = STARTING_BALANCE + realizedPL;
+        const totalEquity = cashBalance + unrealizedPL;
+        const totalReturn = totalEquity - STARTING_BALANCE;
+        const totalReturnPct = (totalReturn / STARTING_BALANCE) * 100;
         const winRate = tradeLog.length > 0 ? (winningTrades / tradeLog.length) * 100 : 0;
+        const positionReturn = entryPrice > 0 ? ((highestPrice - entryPrice) / entryPrice) * 100 : 0;
         
         // Render KPI cards
         document.getElementById('kpiContainer').innerHTML = `
             <div class="kpi-card">
-                <div class="kpi-label">💰 Account Balance</div>
+                <div class="kpi-label">💰 Cash Balance</div>
                 <div class="kpi-value">${formatCurrency(cashBalance)}</div>
                 <div class="small-note">Starting: ${formatCurrency(STARTING_BALANCE)}</div>
             </div>
             <div class="kpi-card">
-                <div class="kpi-label">📈 Net Profit</div>
-                <div class="kpi-value ${totalReturn >= 0 ? 'positive' : 'negative'}">${formatCurrency(totalReturn)}</div>
-                <div class="small-note">Realized + Unrealized</div>
+                <div class="kpi-label">📈 Total Equity</div>
+                <div class="kpi-value positive">${formatCurrency(totalEquity)}</div>
+                <div class="small-note">Cash + Unrealized</div>
             </div>
             <div class="kpi-card">
                 <div class="kpi-label">🏆 Win Rate</div>
@@ -375,8 +367,8 @@
             </div>
             <div class="kpi-card">
                 <div class="kpi-label">📊 Total Return</div>
-                <div class="kpi-value ${totalReturnPct >= 0 ? 'positive' : 'negative'}">${formatPercent(totalReturnPct)}</div>
-                <div class="small-note">Since inception</div>
+                <div class="kpi-value positive">${formatPercent(totalReturnPct)}</div>
+                <div class="small-note">+${formatCurrency(totalReturn)}</div>
             </div>
             <div class="kpi-card">
                 <div class="kpi-label">📌 Open Positions</div>
@@ -387,11 +379,10 @@
         
         // Render position card
         if (currentPosition) {
-            const returnPct = ((highestPrice - entryPrice) / entryPrice) * 100;
             document.getElementById('positionCard').innerHTML = `
                 <div class="current-position-card">
-                    <div><span class="badge-bull">${currentPosition.regime ? currentPosition.regime.toUpperCase() : 'BULL'}</span></div>
-                    <div class="big-number">${currentPosition.ticker} • ${formatPercent(returnPct)}</div>
+                    <div><span class="badge-bull">${regime ? regime.toUpperCase() : 'BULL'}</span></div>
+                    <div class="big-number">${ticker} • ${formatPercent(positionReturn)}</div>
                     <div style="margin: 0.5rem 0;">
                         Entry: ${formatCurrency(entryPrice)} | Current (high): ${formatCurrency(highestPrice)}
                     </div>
@@ -418,7 +409,7 @@
             <div><strong>Total Equity:</strong> <span class="positive">${formatCurrency(totalEquity)}</span></div>
             <div><strong>Total Return:</strong> <span class="positive">${formatPercent(totalReturnPct)}</span></div>
             <hr>
-            ${currentPosition ? `<div><strong>${currentPosition.ticker}:</strong> ${formatPercent(returnPct)} (${formatCurrency(unrealizedPL)})</div>` : '<div>No open position</div>'}
+            ${currentPosition ? `<div><strong>${ticker}:</strong> ${formatPercent(positionReturn)} (${formatCurrency(unrealizedPL)})</div>` : '<div>No open position</div>'}
             <hr>
             <div><strong>Realized P&L:</strong> ${formatCurrency(realizedPL)}</div>
             <div><strong>Unrealized P&L:</strong> <span class="positive">${formatCurrency(unrealizedPL)}</span></div>
@@ -460,14 +451,10 @@
             <div><strong>Market Regime:</strong> BULL</div>
         `;
         
-        // Update timestamp
         document.getElementById('lastUpdated').innerHTML = `Last updated: ${new Date().toLocaleString()}`;
     }
     
-    // Initial load
     loadAndRender();
-    
-    // Refresh every 5 minutes
     setInterval(loadAndRender, 300000);
 </script>
 </body>
