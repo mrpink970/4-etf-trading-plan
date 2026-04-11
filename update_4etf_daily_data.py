@@ -9,6 +9,7 @@ import pandas as pd
 import yfinance as yf
 from openpyxl import load_workbook
 from datetime import datetime, timedelta
+import numpy as np
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -34,6 +35,22 @@ def fetch_ticker_data(ticker, days=30):
         return data
     except Exception as e:
         print(f"    ERROR: {e}")
+        return None
+
+
+def to_scalar(value):
+    """Convert numpy types to Python scalar"""
+    if value is None:
+        return None
+    if isinstance(value, (np.ndarray, pd.Series)):
+        # Get the first element if it's an array/series
+        if len(value) > 0:
+            val = value.item() if hasattr(value, 'item') else float(value[0])
+            return float(val)
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
         return None
 
 
@@ -68,16 +85,23 @@ def update_workbook(workbook_path):
         for ticker, df in all_data.items():
             ticker_data = df[df['Date'] == date]
             if not ticker_data.empty:
-                # Use .values[0] to get scalar value, not .iloc[0]
-                open_val = ticker_data['Open'].values[0]
-                high_val = ticker_data['High'].values[0]
-                low_val = ticker_data['Low'].values[0]
-                close_val = ticker_data['Close'].values[0]
+                # Extract scalar values using .item() or direct access
+                open_val = ticker_data['Open'].iloc[0]
+                high_val = ticker_data['High'].iloc[0]
+                low_val = ticker_data['Low'].iloc[0]
+                close_val = ticker_data['Close'].iloc[0]
                 
-                row[f"{ticker}_Open"] = round(float(open_val), 4)
-                row[f"{ticker}_High"] = round(float(high_val), 4)
-                row[f"{ticker}_Low"] = round(float(low_val), 4)
-                row[f"{ticker}_Close"] = round(float(close_val), 4)
+                # Convert to scalar using .item() if needed
+                if hasattr(open_val, 'item'):
+                    open_val = open_val.item()
+                    high_val = high_val.item()
+                    low_val = low_val.item()
+                    close_val = close_val.item()
+                
+                row[f"{ticker}_Open"] = round(float(open_val), 4) if open_val is not None else None
+                row[f"{ticker}_High"] = round(float(high_val), 4) if high_val is not None else None
+                row[f"{ticker}_Low"] = round(float(low_val), 4) if low_val is not None else None
+                row[f"{ticker}_Close"] = round(float(close_val), 4) if close_val is not None else None
             else:
                 row[f"{ticker}_Open"] = None
                 row[f"{ticker}_High"] = None
@@ -131,7 +155,10 @@ def update_workbook(workbook_path):
         for col_idx, header in enumerate(headers, 1):
             value = row[header]
             if pd.notna(value):
-                ws.cell(row=excel_row, column=col_idx, value=float(value))
+                try:
+                    ws.cell(row=excel_row, column=col_idx, value=float(value))
+                except (TypeError, ValueError):
+                    ws.cell(row=excel_row, column=col_idx, value=value)
         rows_written += 1
     
     print(f"Wrote {rows_written} rows")
@@ -143,6 +170,11 @@ def update_workbook(workbook_path):
         ws_signal['D24'] = 'TQQQ'
         ws_signal['D27'] = datetime.now().strftime('%Y-%m-%d')
         print("Created Signal sheet")
+    else:
+        # Update signal date
+        ws_signal = wb['Signal']
+        ws_signal['D27'] = datetime.now().strftime('%Y-%m-%d')
+        print("Updated Signal sheet date")
     
     wb.save(workbook_path)
     print(f"\n✅ Updated {workbook_path}")
@@ -153,6 +185,7 @@ def update_workbook(workbook_path):
     cols_to_show = ['Date', 'SOXL_Open', 'SOXL_High', 'SOXL_Close']
     available_cols = [c for c in cols_to_show if c in df_final.columns]
     if available_cols:
+        # Convert to string to avoid numpy display issues
         print(df_final.tail(3)[available_cols].to_string())
     else:
         print("No SOXL data available")
