@@ -3,8 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>ETF Paper Trading Dashboard | Single Position</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <title>ETF Paper Trading Dashboard | Live Data</title>
     <style>
         * {
             margin: 0;
@@ -111,7 +110,7 @@
         .data-table {
             width: 100%;
             border-collapse: collapse;
-            font-size: 0.8rem;
+            font-size: 0.75rem;
         }
 
         .data-table th {
@@ -130,26 +129,11 @@
         .badge-bull {
             background: #e0f5e8;
             color: #1e6b3b;
-            padding: 0.2rem 0.6rem;
+            padding: 0.2rem 0.5rem;
             border-radius: 20px;
-            font-size: 0.7rem;
+            font-size: 0.65rem;
             font-weight: 600;
             display: inline-block;
-        }
-
-        .sector-card {
-            background: #f8fafc;
-            border-radius: 0.75rem;
-            padding: 1rem;
-            margin-bottom: 0.7rem;
-            border-left: 4px solid #1e8a4c;
-            text-align: center;
-        }
-
-        .sector-title {
-            font-weight: 700;
-            margin-bottom: 0.3rem;
-            font-size: 1rem;
         }
 
         .current-position-card {
@@ -231,12 +215,6 @@
 
     <div class="two-col">
         <div class="card">
-            <div class="card-header">🎯 Active Sector Signal</div>
-            <div class="card-content" id="sectorSignal">
-                <div class="loading">Loading signal...</div>
-            </div>
-        </div>
-        <div class="card">
             <div class="card-header">📜 Recent Closed Trades</div>
             <div class="card-content">
                 <table class="data-table" id="tradesTable">
@@ -249,49 +227,30 @@
                 </table>
             </div>
         </div>
+        <div class="card">
+            <div class="card-header">📊 System Status</div>
+            <div class="card-content" id="systemStatus">
+                <div class="loading">Loading status...</div>
+            </div>
+        </div>
     </div>
 
     <div class="last-updated" id="lastUpdated">Last updated: --</div>
     <div class="footer">
-        ⚡ Trailing stop: 12% from highest price • Single position rotation system
+        ⚡ Trailing stop: 12% from highest price • Data from GitHub CSV files
     </div>
 </div>
 
 <script>
-    // ============================================================
-    // CONFIGURATION
-    // ============================================================
-    const STARTING_BALANCE = 5000;
-    
-    // GitHub raw URLs
+    // GitHub raw URLs for CSV files
     const POSITIONS_URL = 'https://raw.githubusercontent.com/mrpink970/4-etf-trading-plan/main/etf_paper_positions.csv';
     const TRADE_LOG_URL = 'https://raw.githubusercontent.com/mrpink970/4-etf-trading-plan/main/etf_paper_trade_log.csv';
-    const BALANCE_URL = 'https://raw.githubusercontent.com/mrpink970/4-etf-trading-plan/main/account_balance.csv';
+    const PERFORMANCE_URL = 'https://raw.githubusercontent.com/mrpink970/4-etf-trading-plan/main/etf_paper_performance.csv';
+    const ACCOUNT_BALANCE_URL = 'https://raw.githubusercontent.com/mrpink970/4-etf-trading-plan/main/account_balance.csv';
     
-    // Current market prices (from your data)
-    const CURRENT_PRICES = {
-        'SOXL': 67.19,
-        'TQQQ': 44.58
-    };
-    
-    // ============================================================
-    // HELPER FUNCTIONS
-    // ============================================================
-    function formatCurrency(value) {
-        if (value === undefined || value === null) return '$0.00';
-        const num = parseFloat(value);
-        if (isNaN(num)) return '$0.00';
-        return '$' + num.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-    }
-    
-    function formatPercent(value, decimals = 2) {
-        if (value === undefined || value === null) return '0%';
-        const num = parseFloat(value);
-        if (isNaN(num)) return '0%';
-        return num.toFixed(decimals) + '%';
-    }
-    
-    async function fetchFile(url) {
+    const STARTING_BALANCE = 5000;
+
+    async function fetchCSV(url) {
         try {
             const response = await fetch(url + '?t=' + new Date().getTime());
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -301,7 +260,7 @@
             return null;
         }
     }
-    
+
     function parseCSVtoJSON(csvText) {
         if (!csvText) return [];
         const lines = csvText.trim().split('\n');
@@ -325,250 +284,190 @@
         }
         return result;
     }
-    
-    // ============================================================
-    // RENDER FUNCTIONS
-    // ============================================================
-    
-    function renderKPIs(positions, tradeLog, currentBalance) {
-        // Calculate from current position
-        let totalUnrealizedPL = 0;
-        let currentReturn = 0;
+
+    function formatCurrency(value) {
+        if (value === undefined || value === null) return '$0.00';
+        const num = parseFloat(value);
+        if (isNaN(num)) return '$0.00';
+        return '$' + num.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    }
+
+    function formatPercent(value, decimals = 2) {
+        if (value === undefined || value === null) return '0%';
+        const num = parseFloat(value);
+        if (isNaN(num)) return '0%';
+        return num.toFixed(decimals) + '%';
+    }
+
+    async function loadAndRender() {
+        // Fetch all data
+        const [positionsCSV, tradeLogCSV, performanceCSV, balanceCSV] = await Promise.all([
+            fetchCSV(POSITIONS_URL),
+            fetchCSV(TRADE_LOG_URL),
+            fetchCSV(PERFORMANCE_URL),
+            fetchCSV(ACCOUNT_BALANCE_URL)
+        ]);
+        
+        let positions = positionsCSV ? parseCSVtoJSON(positionsCSV) : [];
+        let tradeLog = tradeLogCSV ? parseCSVtoJSON(tradeLogCSV) : [];
+        let performance = performanceCSV ? parseCSVtoJSON(performanceCSV) : [];
+        let balanceData = balanceCSV ? parseCSVtoJSON(balanceCSV) : [];
+        
+        // Get latest balance (cash balance from closed trades)
+        let cashBalance = STARTING_BALANCE;
+        if (balanceData.length > 0 && balanceData[balanceData.length - 1].balance) {
+            cashBalance = balanceData[balanceData.length - 1].balance;
+        }
+        
+        // Calculate unrealized P&L from positions
+        let unrealizedPL = 0;
+        let currentPosition = null;
+        let highestPrice = 0;
+        let trailingStop = 0;
+        let entryPrice = 0;
+        let entryDate = '';
+        let shares = 0;
         
         if (positions.length > 0) {
             const pos = positions[0];
-            const currentPrice = CURRENT_PRICES[pos.ticker] || pos.highest_price || pos.entry_price;
-            totalUnrealizedPL = (currentPrice - pos.entry_price) * pos.shares;
-            currentReturn = ((currentPrice / pos.entry_price) - 1) * 100;
+            entryPrice = pos.entry_price;
+            shares = pos.shares;
+            highestPrice = pos.highest_price;
+            trailingStop = pos.trailing_stop;
+            entryDate = pos.entry_date;
+            unrealizedPL = (highestPrice - entryPrice) * shares;
+            currentPosition = pos;
         }
         
+        // Calculate total equity
+        const totalEquity = cashBalance + unrealizedPL;
+        const totalReturn = totalEquity - STARTING_BALANCE;
+        const totalReturnPct = (totalReturn / STARTING_BALANCE) * 100;
+        
         // Calculate realized P&L from trade log
-        let totalRealizedPL = 0;
-        let validTrades = 0;
+        let realizedPL = 0;
+        let winningTrades = 0;
         tradeLog.forEach(trade => {
-            const returnPct = trade.return_pct || 0;
-            if (Math.abs(returnPct) > 0.01 && trade.gross_pl) {
-                totalRealizedPL += trade.gross_pl;
-                validTrades++;
+            if (trade.gross_pl) {
+                realizedPL += trade.gross_pl;
+                if (trade.gross_pl > 0) winningTrades++;
             }
         });
         
-        const totalPL = totalUnrealizedPL + totalRealizedPL;
-        const totalBalance = currentBalance || STARTING_BALANCE + totalPL;
-        const winRate = validTrades > 0 ? 100 : 0;
+        const winRate = tradeLog.length > 0 ? (winningTrades / tradeLog.length) * 100 : 0;
         
+        // Render KPI cards
         document.getElementById('kpiContainer').innerHTML = `
             <div class="kpi-card">
                 <div class="kpi-label">💰 Account Balance</div>
-                <div class="kpi-value">${formatCurrency(totalBalance)}</div>
+                <div class="kpi-value">${formatCurrency(cashBalance)}</div>
                 <div class="small-note">Starting: ${formatCurrency(STARTING_BALANCE)}</div>
             </div>
             <div class="kpi-card">
                 <div class="kpi-label">📈 Net Profit</div>
-                <div class="kpi-value ${totalPL >= 0 ? 'positive' : 'negative'}">${formatCurrency(totalPL)}</div>
+                <div class="kpi-value ${totalReturn >= 0 ? 'positive' : 'negative'}">${formatCurrency(totalReturn)}</div>
                 <div class="small-note">Realized + Unrealized</div>
             </div>
             <div class="kpi-card">
                 <div class="kpi-label">🏆 Win Rate</div>
-                <div class="kpi-value">${winRate}%</div>
-                <div class="small-note">${validTrades} closed trades</div>
+                <div class="kpi-value">${winRate.toFixed(1)}%</div>
+                <div class="small-note">${tradeLog.length} closed trades</div>
             </div>
             <div class="kpi-card">
-                <div class="kpi-label">📊 Open Positions</div>
+                <div class="kpi-label">📊 Total Return</div>
+                <div class="kpi-value ${totalReturnPct >= 0 ? 'positive' : 'negative'}">${formatPercent(totalReturnPct)}</div>
+                <div class="small-note">Since inception</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-label">📌 Open Positions</div>
                 <div class="kpi-value">${positions.length}</div>
-                <div class="small-note">Unrealized: ${formatCurrency(totalUnrealizedPL)}</div>
+                <div class="small-note">Unrealized: ${formatCurrency(unrealizedPL)}</div>
             </div>
         `;
-    }
-    
-    function renderPositionCard(positions) {
-        const container = document.getElementById('positionCard');
         
-        if (!positions.length) {
-            container.innerHTML = `
+        // Render position card
+        if (currentPosition) {
+            const returnPct = ((highestPrice - entryPrice) / entryPrice) * 100;
+            document.getElementById('positionCard').innerHTML = `
+                <div class="current-position-card">
+                    <div><span class="badge-bull">${currentPosition.regime ? currentPosition.regime.toUpperCase() : 'BULL'}</span></div>
+                    <div class="big-number">${currentPosition.ticker} • ${formatPercent(returnPct)}</div>
+                    <div style="margin: 0.5rem 0;">
+                        Entry: ${formatCurrency(entryPrice)} | Current (high): ${formatCurrency(highestPrice)}
+                    </div>
+                    <div>Shares: ${shares} | Unrealized: <span class="positive">${formatCurrency(unrealizedPL)}</span></div>
+                    <div class="small-note" style="margin-top: 0.5rem;">
+                        Trailing Stop: ${formatCurrency(trailingStop)} (12% from high of ${formatCurrency(highestPrice)})
+                    </div>
+                    <div class="small-note">Entry Date: ${entryDate}</div>
+                </div>
+            `;
+        } else {
+            document.getElementById('positionCard').innerHTML = `
                 <div class="current-position-card">
                     <div style="font-size: 1.2rem; margin-bottom: 0.5rem;">📭 No Open Position</div>
                     <div class="small-note">In cash • Waiting for next signal</div>
                 </div>
             `;
-            return;
         }
         
-        const pos = positions[0];
-        const currentPrice = CURRENT_PRICES[pos.ticker] || pos.highest_price || pos.entry_price;
-        const unrealizedPL = (currentPrice - pos.entry_price) * pos.shares;
-        const returnPct = ((currentPrice / pos.entry_price) - 1) * 100;
-        const plClass = unrealizedPL >= 0 ? 'positive' : 'negative';
-        
-        container.innerHTML = `
-            <div class="current-position-card">
-                <div><span class="badge-bull">${pos.regime ? pos.regime.toUpperCase() : 'BULL'}</span></div>
-                <div class="big-number">${pos.ticker} • ${formatPercent(returnPct)}</div>
-                <div style="margin: 0.5rem 0;">
-                    Entry: ${formatCurrency(pos.entry_price)} | Current: ${formatCurrency(currentPrice)}
-                </div>
-                <div>Shares: ${pos.shares} | Unrealized: <span class="${plClass}">${formatCurrency(unrealizedPL)}</span></div>
-                <div class="small-note" style="margin-top: 0.5rem;">
-                    Trailing Stop: ${formatCurrency(pos.trailing_stop)} (12% from high of ${formatCurrency(pos.highest_price)})
-                </div>
-            </div>
-        `;
-    }
-    
-    function renderPerformanceSummary(positions, tradeLog, currentBalance) {
-        let totalUnrealizedPL = 0;
-        let currentReturn = 0;
-        let positionDetails = '';
-        
-        if (positions.length > 0) {
-            const pos = positions[0];
-            const currentPrice = CURRENT_PRICES[pos.ticker] || pos.highest_price || pos.entry_price;
-            totalUnrealizedPL = (currentPrice - pos.entry_price) * pos.shares;
-            currentReturn = ((currentPrice / pos.entry_price) - 1) * 100;
-            positionDetails = `<div><strong>${pos.ticker}:</strong> ${formatPercent(currentReturn)} (${formatCurrency(totalUnrealizedPL)})</div>`;
-        }
-        
-        let totalRealizedPL = 0;
-        tradeLog.forEach(trade => {
-            const returnPct = trade.return_pct || 0;
-            if (Math.abs(returnPct) > 0.01 && trade.gross_pl) {
-                totalRealizedPL += trade.gross_pl;
-            }
-        });
-        
-        const totalPL = totalUnrealizedPL + totalRealizedPL;
-        const totalBalance = currentBalance || STARTING_BALANCE + totalPL;
-        const totalReturnPct = (totalPL / STARTING_BALANCE) * 100;
-        
-        // Get best return from current position or trade log
-        let bestReturn = currentReturn;
-        let avgGain = currentReturn;
-        
-        if (tradeLog.length > 0) {
-            const bestTrade = Math.max(...tradeLog.map(t => t.return_pct || 0));
-            if (bestTrade > bestReturn) bestReturn = bestTrade;
-            const validGains = tradeLog.filter(t => (t.return_pct || 0) > 0.01).map(t => t.return_pct);
-            if (validGains.length > 0) {
-                avgGain = validGains.reduce((a, b) => a + b, 0) / validGains.length;
-            }
-        }
-        
+        // Render performance summary
         document.getElementById('performanceSummary').innerHTML = `
             <div><strong>Starting Balance:</strong> ${formatCurrency(STARTING_BALANCE)}</div>
-            <div><strong>Current Balance:</strong> ${formatCurrency(totalBalance)}</div>
+            <div><strong>Cash Balance:</strong> ${formatCurrency(cashBalance)}</div>
+            <div><strong>Total Equity:</strong> <span class="positive">${formatCurrency(totalEquity)}</span></div>
             <div><strong>Total Return:</strong> <span class="positive">${formatPercent(totalReturnPct)}</span></div>
             <hr>
-            ${positionDetails || '<div>No open position</div>'}
+            ${currentPosition ? `<div><strong>${currentPosition.ticker}:</strong> ${formatPercent(returnPct)} (${formatCurrency(unrealizedPL)})</div>` : '<div>No open position</div>'}
             <hr>
-            <div><strong>Realized P&L:</strong> ${formatCurrency(totalRealizedPL)}</div>
-            <div><strong>Unrealized P&L:</strong> <span class="positive">${formatCurrency(totalUnrealizedPL)}</span></div>
-            <hr>
-            <div><strong>Avg Gain (Winners):</strong> ${formatPercent(avgGain)}</div>
-            <div><strong>Largest Gain:</strong> ${formatPercent(bestReturn)}</div>
+            <div><strong>Realized P&L:</strong> ${formatCurrency(realizedPL)}</div>
+            <div><strong>Unrealized P&L:</strong> <span class="positive">${formatCurrency(unrealizedPL)}</span></div>
             <hr>
             <div><strong>Strategy:</strong> Single position • Rotation enabled</div>
             <div><strong>Trailing Stop:</strong> 12% from highest price</div>
         `;
-    }
-    
-    function renderSectorSignal(positions) {
-        const container = document.getElementById('sectorSignal');
         
-        // Show only the sector for the current position
-        if (positions.length > 0) {
-            const pos = positions[0];
-            
-            if (pos.ticker === 'SOXL') {
-                container.innerHTML = `
-                    <div class="sector-card">
-                        <div class="sector-title">💾 Semiconductors (SMH) — BULL</div>
-                        <div>→ Currently holding ${pos.ticker} (3x Long)</div>
-                        <div class="small-note">✅ Bull regime active</div>
-                    </div>
-                `;
-            } else if (pos.ticker === 'TQQQ') {
-                container.innerHTML = `
-                    <div class="sector-card">
-                        <div class="sector-title">📊 NASDAQ (QQQ) — BULL</div>
-                        <div>→ Currently holding ${pos.ticker} (3x Long)</div>
-                        <div class="small-note">✅ Bull regime active</div>
-                    </div>
-                `;
-            } else {
-                container.innerHTML = `
-                    <div class="sector-card">
-                        <div class="sector-title">📊 Current Position: ${pos.ticker}</div>
-                        <div>→ ${pos.regime ? pos.regime.toUpperCase() : 'BULL'} regime</div>
-                    </div>
-                `;
-            }
-        } else {
-            container.innerHTML = `
-                <div class="sector-card">
-                    <div class="sector-title">📊 No Active Position</div>
-                    <div>Waiting for next signal</div>
-                    <div class="small-note">System will enter top-ranked ETF</div>
-                </div>
-            `;
-        }
-    }
-    
-    function renderRecentTrades(tradeLog) {
+        // Render closed trades
         const tbody = document.getElementById('tradesBody');
-        // Filter out tiny test trades
-        const validTrades = tradeLog.filter(t => Math.abs(t.return_pct || 0) > 0.01);
-        
-        if (!validTrades.length) {
-            tbody.innerHTML = '<tr><td colspan="5">No closed trades yet<\/td><\/tr>';
-            return;
+        if (tradeLog.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5">No closed trades yet</td></tr>';
+        } else {
+            const recentTrades = [...tradeLog].reverse().slice(0, 10);
+            tbody.innerHTML = recentTrades.map(trade => {
+                const plClass = (trade.gross_pl || 0) >= 0 ? 'positive' : 'negative';
+                return `
+                    <tr>
+                        <td><strong>${trade.ticker || 'N/A'}</strong></td>
+                        <td>${trade.exit_date || 'N/A'}</td>
+                        <td class="${plClass}">${formatPercent(trade.return_pct || 0)}</td>
+                        <td class="${plClass}">${formatCurrency(trade.gross_pl || 0)}</td>
+                        <td>${trade.exit_reason || 'trailing_stop'}</td>
+                    </tr>
+                `;
+            }).join('');
         }
         
-        const recentTrades = [...validTrades].reverse().slice(0, 10);
-        tbody.innerHTML = recentTrades.map(trade => {
-            const plClass = (trade.gross_pl || 0) >= 0 ? 'positive' : 'negative';
-            return `
-                <tr>
-                    <td><strong>${trade.ticker || 'N/A'}<\/strong><\/td>
-                    <td>${trade.exit_date || 'N/A'}<\/td>
-                    <td class="${plClass}">${formatPercent(trade.return_pct || 0)}<\/td>
-                    <td class="${plClass}">${formatCurrency(trade.gross_pl || 0)}<\/td>
-                    <td>${trade.exit_reason || 'trailing_stop'}<\/td>
-                <\/tr>
-            `;
-        }).join('');
-    }
-    
-    // ============================================================
-    // MAIN LOAD FUNCTION
-    // ============================================================
-    async function loadAndRender() {
-        const [positionsCSV, tradeLogCSV, balanceCSV] = await Promise.all([
-            fetchFile(POSITIONS_URL),
-            fetchFile(TRADE_LOG_URL),
-            fetchFile(BALANCE_URL)
-        ]);
+        // Render system status
+        document.getElementById('systemStatus').innerHTML = `
+            <div><strong>System:</strong> 4_ETF Paper Trading</div>
+            <div><strong>Status:</strong> <span class="positive">Active</span></div>
+            <div><strong>Position Limit:</strong> 1 (single position)</div>
+            <div><strong>Cash Zone:</strong> |score| < 5 = no entry</div>
+            <div><strong>Trailing Stop:</strong> 12% fixed</div>
+            <div><strong>Data Source:</strong> Yahoo Finance</div>
+            <hr>
+            <div><strong>Current Signal:</strong> SOXL (score 20.32)</div>
+            <div><strong>Market Regime:</strong> BULL</div>
+        `;
         
-        let positions = positionsCSV ? parseCSVtoJSON(positionsCSV) : [];
-        let tradeLog = tradeLogCSV ? parseCSVtoJSON(tradeLogCSV) : [];
-        let currentBalance = STARTING_BALANCE;
-        
-        if (balanceCSV) {
-            const balanceData = parseCSVtoJSON(balanceCSV);
-            if (balanceData.length > 0 && balanceData[balanceData.length - 1].balance) {
-                currentBalance = balanceData[balanceData.length - 1].balance;
-            }
-        }
-        
-        renderKPIs(positions, tradeLog, currentBalance);
-        renderPositionCard(positions);
-        renderPerformanceSummary(positions, tradeLog, currentBalance);
-        renderSectorSignal(positions);
-        renderRecentTrades(tradeLog);
-        
+        // Update timestamp
         document.getElementById('lastUpdated').innerHTML = `Last updated: ${new Date().toLocaleString()}`;
     }
     
+    // Initial load
     loadAndRender();
+    
+    // Refresh every 5 minutes
     setInterval(loadAndRender, 300000);
 </script>
 </body>
