@@ -68,17 +68,16 @@ def update_workbook(workbook_path):
         for ticker, df in all_data.items():
             ticker_data = df[df['Date'] == date]
             if not ticker_data.empty:
-                # Get the values - need to extract scalar values
-                open_val = ticker_data['Open'].iloc[0]
-                high_val = ticker_data['High'].iloc[0]
-                low_val = ticker_data['Low'].iloc[0]
-                close_val = ticker_data['Close'].iloc[0]
+                # Use .values[0] to get scalar value, not .iloc[0]
+                open_val = ticker_data['Open'].values[0]
+                high_val = ticker_data['High'].values[0]
+                low_val = ticker_data['Low'].values[0]
+                close_val = ticker_data['Close'].values[0]
                 
-                # Convert to float if needed
-                row[f"{ticker}_Open"] = round(float(open_val), 4) if open_val is not None else None
-                row[f"{ticker}_High"] = round(float(high_val), 4) if high_val is not None else None
-                row[f"{ticker}_Low"] = round(float(low_val), 4) if low_val is not None else None
-                row[f"{ticker}_Close"] = round(float(close_val), 4) if close_val is not None else None
+                row[f"{ticker}_Open"] = round(float(open_val), 4)
+                row[f"{ticker}_High"] = round(float(high_val), 4)
+                row[f"{ticker}_Low"] = round(float(low_val), 4)
+                row[f"{ticker}_Close"] = round(float(close_val), 4)
             else:
                 row[f"{ticker}_Open"] = None
                 row[f"{ticker}_High"] = None
@@ -95,6 +94,10 @@ def update_workbook(workbook_path):
             df_final[close_col] = pd.to_numeric(df_final[close_col], errors='coerce')
             df_final[f"{ticker}_%Chg"] = df_final[close_col].pct_change() * 100
             df_final[f"{ticker}_%Chg"] = df_final[f"{ticker}_%Chg"].round(4)
+            df_final[f"{ticker}_3D"] = df_final[close_col].pct_change(periods=3) * 100
+            df_final[f"{ticker}_3D"] = df_final[f"{ticker}_3D"].round(4)
+            df_final[f"{ticker}_5D"] = df_final[close_col].pct_change(periods=5) * 100
+            df_final[f"{ticker}_5D"] = df_final[f"{ticker}_5D"].round(4)
     
     print(f"\nFinal data: {len(df_final)} rows, {len(df_final.columns)} columns")
     
@@ -128,7 +131,7 @@ def update_workbook(workbook_path):
         for col_idx, header in enumerate(headers, 1):
             value = row[header]
             if pd.notna(value):
-                ws.cell(row=excel_row, column=col_idx, value=value)
+                ws.cell(row=excel_row, column=col_idx, value=float(value))
         rows_written += 1
     
     print(f"Wrote {rows_written} rows")
@@ -150,7 +153,7 @@ def update_workbook(workbook_path):
     cols_to_show = ['Date', 'SOXL_Open', 'SOXL_High', 'SOXL_Close']
     available_cols = [c for c in cols_to_show if c in df_final.columns]
     if available_cols:
-        print(df_final.tail(3)[available_cols])
+        print(df_final.tail(3)[available_cols].to_string())
     else:
         print("No SOXL data available")
     
