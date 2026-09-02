@@ -1,1 +1,2 @@
 ticker,regime,entry_date,entry_price,shares,highest_price,trailing_stop,rank_score_at_entry
+SOXL,bull,2026-09-01,106.355,27,108.6395,95.60276,-7.5328
